@@ -1,0 +1,11 @@
+
+-including ref_annot.gtf.gene_spans as an additional resource file.
+
+
+
+## FusionFilter Release v0.1.0 (Mar 5, 2016)
+
+separates homology filter from promiscuity filter, and homology filter is followed by promiscuity filter.
+
+Also, filtering based on promiscuity takes into account the abundance of evidence so that well-supported fusions are not discarded due to the finding of lowly supported promiscuous entries.
+
