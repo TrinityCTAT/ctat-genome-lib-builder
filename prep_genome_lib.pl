@@ -182,11 +182,6 @@ main: {
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_annot.gtf.ok"));
 
 
-    # copy over the AnnotFilterRule:
-    $cmd = "cp $annot_filter_rule $output_dir/.";
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/annotfiltrule_cp.ok"));
-    
-    
     # extract exon records    
     $cmd = "bash -c \" set -eof pipefail; $UTILDIR/gtf_to_exon_gene_records.pl $output_dir/ref_annot.gtf  | sort -k 1,1 -k4,4g -k5,5g | uniq  > $output_dir/ref_annot.gtf.mini.sortu \" ";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_annot.gtf.mini.sortu.ok"));
@@ -279,11 +274,17 @@ main: {
     ######################
     # build the fusion annotation database
     # 
+
+    my $build_time = time();  ## so we always rerun the annotation build step, no skipping here...
+    # copy over the AnnotFilterRule:
+    $cmd = "cp $annot_filter_rule $output_dir/.";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/annotfiltrule_cp.$build_time.ok"));
+    
     $cmd = "$UTILDIR/build_fusion_annot_db_index.pl --gene_spans $output_dir/ref_annot.gtf.gene_spans --out_db_file $output_dir/fusion_annot_lib.idx";
     if ($fusion_annot_lib) {
         $cmd .= " --key_pairs $fusion_annot_lib";
     }
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/_fusion_annot_lib.idx.ok"));
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/_fusion_annot_lib.idx.$build_time.ok"));
     
 
     ############################################################
