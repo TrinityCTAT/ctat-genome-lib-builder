@@ -73,6 +73,7 @@ my $gmap_build_flag = 0;
 my $pfam_db = "";
 
 my $SKIP_STAR_FLAG = 0;
+my $STAR_ONLY_FLAG = 0;
 
 &GetOptions ( 'h' => \$help_flag,
 
@@ -99,8 +100,8 @@ my $SKIP_STAR_FLAG = 0;
               
               # misc opts
               'skip_star' => \$SKIP_STAR_FLAG,
+              'STAR_ONLY' => \$STAR_ONLY_FLAG,
               
-
  );
 
 
@@ -113,6 +114,9 @@ unless ($genome_fa_file && $gtf_file && $max_readlength) {
 }
 
 my @required_tools = ("STAR", "makeblastdb", "blastn");
+if ($STAR_ONLY_FLAG) {
+    @required_tools = ("STAR");
+}
 if ($gmap_build_flag) {
     push (@required_tools, "gmap_build");
 }
@@ -207,6 +211,13 @@ main: {
         $pipeliner->add_commands(new Command($cmd, "$star_index/build.ok"));
     
     }
+
+    if ($STAR_ONLY_FLAG) {
+        $pipeliner->run();
+        print STDERR "** --STAR_ONLY set, stopping now.\n";
+        exit(0);
+    }
+
     
     $cmd = "$UTILDIR/gtf_to_gene_spans.pl $output_dir/ref_annot.gtf > $output_dir/ref_annot.gtf.gene_spans";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_annot.gtf.gene_spans.ok") );
