@@ -356,7 +356,9 @@ sub check_for_required_tools {
     }
 
     if ($missing_flag) {
-        die "Error, missing at least one required tool. See error messages and perform required software installations before running.";
+        
+        ## if building from a provided source lib, then we don't need to die on missing tools
+        #die "Error, missing at least one required tool. See error messages and perform required software installations before running.";
     }
 
 }
