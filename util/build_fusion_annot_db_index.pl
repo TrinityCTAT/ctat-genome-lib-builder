@@ -59,6 +59,9 @@ main: {
 
 
     my $idx = new TiedHash( { create => $out_db_file } );
+
+    ## store placeholder to ensure it's working in applications that leverage it.
+    $idx->store_key_value("geneABC--geneXYZ", "__placeholder_testval__");
     
     open(my $fh, $gene_spans_file) or die "Error, cannot open file: $gene_spans_file";
     while (<$fh>) {
