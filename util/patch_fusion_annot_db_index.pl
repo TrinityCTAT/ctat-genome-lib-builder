@@ -16,16 +16,18 @@ main: {
 
     tie (%tied_idx, 'DB_File', $fusion_lib, O_RDWR, 0, $DB_BTREE);
     
-    my $token = "BCR--ABL1$;SIMPLE";
+    my @tokens = ("BCR--ABL1$;SIMPLE", "geneABC--geneXYZ");
 
-    if (my $annot = $tied_idx{$token}) { 
-        print "Found annot already exists as: $annot\n";
+    foreach my $token (@tokens) {
+            
+        if (my $annot = $tied_idx{$token}) { 
+            print "Found $token annot already exists as: $annot\n";
+        }
+        else {
+            print "Storing placeholder: $token.\n";
+            $tied_idx{$token} = "__placeholder__";
+        }
     }
-    else {
-        print "Storing placeholder.\n";
-        $tied_idx{"BCR--ABL1$;SIMPLE"} = "__placeholder__";
-    }
-
     untie(%tied_idx);
     
     exit(0);
