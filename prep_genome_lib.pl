@@ -199,7 +199,7 @@ main: {
 
 
     # extract exon records    
-    $cmd = "bash -c \" set -eof pipefail; $UTILDIR/gtf_to_exon_gene_records.pl $output_dir/ref_annot.gtf  | sort -k 1,1 -k4,4g -k5,5g | uniq  > $output_dir/ref_annot.gtf.mini.sortu \" ";
+    $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/gtf_to_exon_gene_records.pl $output_dir/ref_annot.gtf  | sort -k 1,1 -k4,4g -k5,5g | uniq  > $output_dir/ref_annot.gtf.mini.sortu \" ";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_annot.gtf.mini.sortu.ok"));
             
     # build star index
@@ -249,7 +249,7 @@ main: {
     $cmd = "blastn -query ref_annot.cdsplus.fa -db ref_annot.cdsplus.fa -max_target_seqs 10000 -outfmt 6 -evalue 1e-10 -num_threads $CPU -dust no > ref_annot.cdsplus.allvsall.outfmt6";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdsplus.allvsall.outfmt6.ok"));
     
-    $cmd = "bash -c \" set -eof pipefail; $UTILDIR/blast_outfmt6_replace_trans_id_w_gene_symbol.pl  ref_annot.cdsplus.fa ref_annot.cdsplus.allvsall.outfmt6 | gzip > ref_annot.cdsplus.allvsall.outfmt6.genesym.gz\" ";
+    $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/blast_outfmt6_replace_trans_id_w_gene_symbol.pl  ref_annot.cdsplus.fa ref_annot.cdsplus.allvsall.outfmt6 | gzip > ref_annot.cdsplus.allvsall.outfmt6.genesym.gz\" ";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdsplus.allvsall.outfmt6.genesym.gz.ok"));
 
     # index the blast hits:
@@ -375,7 +375,70 @@ sub check_for_required_tools {
 
 }
     
+####
+sub filter_human_gencode_annotations {
+    my ($gtf_file) = @_;
+
+    my $pipeliner = new Pipeliner(-verbose => 2,
+                                  -checkpoint_dir => '__gencode_refinement_chkpts');
+
+    ## filter out certain annotation features.
+
+    my $cmd = "$UTILDIR/gencode_extract_relevant_gtf_exons.pl $gtf_file > $gtf_file.feature_selected";
+    $pipeliner->add_commands(new Command($cmd, "feature_selection.ok"));
+    
+    
+    ## remove readthru transcripts
+    my $no_readthrus_gtf = "$gtf_file.feature_selected.noreadthrus";
+
+
+    my $cmd = "$UTILDIR/remove_long_intron_readthru_transcripts.pl $gtf_file.feature_selected 100000 > $no_readthrus_gtf";
+    $pipeliner->add_commands(new Command($cmd, "remove_readthrus.ok"));
+    
+        
+    ########################
+    ## create IGH superlocus
+    $cmd = "bash -c \"set -euxo pipefail; cat $no_readthrus_gtf | egrep 'IG_V_gene|IG_C_gene|IG_D_gene|IG_J_gene' | egrep ^chr14  > IGH_locus.gtf\"";
+    $pipeliner->add_commands(new Command($cmd, "igh_locus.ok"));
+
+    $cmd = "$UTILDIR/make_super_locus.pl IGH_locus.gtf IGH\@ IGH.g\@ IGH.t\@ > IGH.superlocus.gtf";
+    $pipeliner->add_commands(new Command($cmd, "igh_superlocus.ok"));
+
+    $cmd = "bash -c \"set -euxo pipefail; cat IGH.superlocus.gtf | perl -lane 's/IGH/IGH-/g; print;'  | perl -lane '\@x = split(/\\t/); \\\$x[6] = \\\"+\\\"; print join(\\\"\\t\\\", \@x);' >  IGH.superlocus.revcomp.gtf\" ";
+    $pipeliner->add_commands(new Command($cmd, "igh_superlocus.revcomp.ok") );
+
+    
+    ########################
+    ## create IGL superlocus
+    
+    ## extract the exon features for IGL
+    $cmd = "bash -c \"set -euxo pipefail; cat $no_readthrus_gtf | egrep 'IG_V_gene|IG_C_gene|IG_D_gene|IG_J_gene' | egrep ^chr22 > IGL_locus.gtf\" ";
+    $pipeliner->add_commands(new Command($cmd, "igl_locus.ok") );
+
+    ## make IGL super-locus
+    $cmd = "$UTILDIR/make_super_locus.pl IGL_locus.gtf IGL\@ IGL.g\@ IGL.t\@ > IGL.superlocus.gtf";
+    $pipeliner->add_commands(new Command($cmd, "igl_superlocus.ok"));
+    
+    ## add reverse complement
+    $cmd = "bash -c \"set -euxo pipefail; cat IGL.superlocus.gtf  | perl -lane 's/IGL/IGL-/g; print;' | perl -lane '\@x = split(/\t/); \\\$x[6] = \\\"-\\\"; print join(\\\"\\t\\\", \@x);' >  IGL.superlocus.revcomp.gtf \" ";
+    $pipeliner->add_commands(new Command($cmd, "igl_superlocus.revcomp.ok") );
+
+
+    ##########################
+    ## Generate final annotation file:
+
+    my $refined_gtf = "$no_readthrus_gtf.refined.gtf";
+    $cmd = "cat $no_readthrus_gtf IGH.superlocus.gtf IGH.superlocus.revcomp.gtf IGL.superlocus.gtf IGL.superlocus.revcomp.gtf > $refined_gtf";
+    
+    $pipeliner->add_commands(new Command($cmd, "refined_gtf.ok"));
+    
+    $pipeliner->run();
+
+    
+    return($refined_gtf);
+
+}
+
 
 
         
-    

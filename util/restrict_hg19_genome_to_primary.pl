@@ -19,12 +19,18 @@ while(my $line = <$fh>) {
         if ($line =~ /^>(\S+) (\S+)/) {
             my $valA = $1;
             my $valB = $2;
-            
-            $valA =~ s/chr//i;
-            
-            if ($valA eq $valB) {
+
+            if ($valA =~ /^chr/i) {
                 $print_flag = 1;
-                # not a patch
+            }
+            else {
+            
+                $valA =~ s/chr//i;
+            
+                if ($valA eq $valB) {
+                    $print_flag = 1;
+                    # not a patch
+                }
             }
         }
     }
