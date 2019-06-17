@@ -55,6 +55,8 @@ my $usage = <<__EOUSAGE__;
 #
 #  --outTmpDir	<string>	   passed to STAR (very useful if local disks are faster than network disks)
 #
+#  --human_gencode_filter      customized prep operations for human/gencode genome and annotation data.
+#
 ##################################################################################
 
 
@@ -75,6 +77,8 @@ my $pfam_db = "";
 my $SKIP_STAR_FLAG = 0;
 my $STAR_ONLY_FLAG = 0;
 
+my $HUMAN_GENCODE_FILTER = 0;
+
 &GetOptions ( 'h' => \$help_flag,
 
               # required for STAR-Fusion, FusionInspector, GMAP-fusion
@@ -88,7 +92,9 @@ my $STAR_ONLY_FLAG = 0;
               'output_dir=s' => \$output_dir,
               'CPU=i' => \$CPU,
               'outTmpDir=s' => \$outTmpDir,
-    
+
+              'human_gencode_filter' => \$HUMAN_GENCODE_FILTER,
+              
               # for discasm
               'gmap_build' => \$gmap_build_flag,
     
@@ -154,6 +160,12 @@ if ($missing_tool_flag) {
 
 main: {
 
+    if ($HUMAN_GENCODE_FILTER) {
+            
+        $gtf_file = &filter_human_gencode_annotations($gtf_file);
+    }
+    
+    
     my $pipeliner = new Pipeliner(-verbose => 2);
     
     #################
