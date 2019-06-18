@@ -124,9 +124,8 @@ main: {
         if (/^\#/) { next; }
         my @x = split(/\t/);
 
-        # just exon features
-        unless ($x[2] eq "exon") { next; }
-
+        unless ($x[2] =~ /^(exon|CDS)$/) { next; }
+        
         my $info = $x[8];
         if ($info =~ /gene_type \"([^\"]+)\"/) {
             my $gene_type = $1;

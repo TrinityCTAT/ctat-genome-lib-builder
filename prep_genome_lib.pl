@@ -398,7 +398,7 @@ sub filter_human_gencode_annotations {
         
     ########################
     ## create IGH superlocus
-    $cmd = "bash -c \"set -euxo pipefail; cat $no_readthrus_gtf | egrep 'IG_V_gene|IG_C_gene|IG_D_gene|IG_J_gene' | egrep ^chr14  > IGH_locus.gtf\"";
+    $cmd = "bash -c \"set -euxo pipefail; cat $no_readthrus_gtf | egrep 'IG_V_gene|IG_C_gene|IG_D_gene|IG_J_gene' | awk '{ if (\\\$3 == \\\"exon\\\") { print } }' | egrep ^chr14  > IGH_locus.gtf\"";
     $pipeliner->add_commands(new Command($cmd, "igh_locus.ok"));
 
     $cmd = "$UTILDIR/make_super_locus.pl IGH_locus.gtf IGH\@ IGH.g\@ IGH.t\@ > IGH.superlocus.gtf";
@@ -412,9 +412,9 @@ sub filter_human_gencode_annotations {
     ## create IGL superlocus
     
     ## extract the exon features for IGL
-    $cmd = "bash -c \"set -euxo pipefail; cat $no_readthrus_gtf | egrep 'IG_V_gene|IG_C_gene|IG_D_gene|IG_J_gene' | egrep ^chr22 > IGL_locus.gtf\" ";
+    $cmd = "bash -c \"set -euxo pipefail; cat $no_readthrus_gtf | egrep 'IG_V_gene|IG_C_gene|IG_D_gene|IG_J_gene' | awk '{ if (\\\$3 == \\\"exon\\\") { print } }' | egrep ^chr22 > IGL_locus.gtf\" ";
     $pipeliner->add_commands(new Command($cmd, "igl_locus.ok") );
-
+    
     ## make IGL super-locus
     $cmd = "$UTILDIR/make_super_locus.pl IGL_locus.gtf IGL\@ IGL.g\@ IGL.t\@ > IGL.superlocus.gtf";
     $pipeliner->add_commands(new Command($cmd, "igl_superlocus.ok"));
@@ -434,7 +434,6 @@ sub filter_human_gencode_annotations {
     
     $pipeliner->run();
 
-    
     return($refined_gtf);
 
 }
