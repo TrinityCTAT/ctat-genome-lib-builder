@@ -25,15 +25,26 @@ my %WANT = (
     #lincRNA	lincRNA	51518.00
     
     #antisense	antisense	41237.00
+
+    'pseudogene' => 1,
+    
     #pseudogene	processed_pseudogene	22972.00
     #pseudogene	pseudogene	15239.00
     #pseudogene	unprocessed_pseudogene	11202.00
     #pseudogene	processed_transcript	10912.00
     #miRNA	miRNA	9165.00
+    
+    'miRNA' => 1,
+    
     #pseudogene	transcribed_unprocessed_pseudogene	7086.00
+    
+
+    'misc_RNA' => 1,
+    
     #misc_RNA	misc_RNA	6102.00
     #snRNA	snRNA	5748.00
     #processed_transcript	processed_transcript	5493.00
+
     #snoRNA	snoRNA	4371.00
     #sense_intronic	sense_intronic	3145.00
     #processed_transcript	lincRNA	3047.00
