@@ -6,7 +6,6 @@ use FindBin;
 use lib ("$FindBin::Bin/../lib");
 use TiedHash;
 use Carp;
-use PerlIO::gzip;
 
 my $usage = "\n\n\tusage: output_index_filename blast_pairs.gene_sym.gz [blast_pairs_supp.gene_sym.gz ...]\n\n";
 
@@ -29,8 +28,8 @@ main: {
 
         print STDERR "-processing blast pairs from: $blast_pairs\n";
         
-        open (my $fh, "<:gzip", $blast_pairs) or die "Error, cannot read $blast_pairs  ";
-
+        open (my $fh, "gunzip -c $blast_pairs |") or die "Error, cannot read $blast_pairs  ";
+        
         my $total_linecount = `gunzip -c $blast_pairs | wc -l `;
         chomp $total_linecount;
         $total_linecount = int($total_linecount);

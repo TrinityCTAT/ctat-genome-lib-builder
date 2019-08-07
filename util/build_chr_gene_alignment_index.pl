@@ -7,7 +7,6 @@ use lib ("$FindBin::Bin/../lib");
 use TiedHash;
 use Carp;
 use Overlap_piler;
-use PerlIO::gzip;
 use Data::Dumper;
 use Getopt::Long qw(:config posix_default no_ignore_case bundling pass_through);
 use JSON::XS;
