@@ -119,6 +119,11 @@ unless ($genome_fa_file && $gtf_file && $max_readlength) {
     die $usage;
 }
 
+if (@ARGV) {
+    die "Error, didn't understand parameters: @ARGV";
+}
+        
+
 my @required_tools = ("STAR", "makeblastdb", "blastn");
 if ($STAR_ONLY_FLAG) {
     @required_tools = ("STAR");
