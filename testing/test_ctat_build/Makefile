@@ -3,6 +3,11 @@
 test:
 	../../prep_genome_lib.pl  --genome_fa data/small.fa --gtf data/small.gtf
 
+
+test_docker:
+	docker run --rm -it -v `pwd`:/workspace --rm trinityctat/ctatfusion bash -c 'cd /workspace && /usr/local/src/STAR-Fusion/ctat-genome-lib-builder/prep_genome_lib.pl --genome_fa data/small.fa --gtf data/small.gtf'
+
+
 clean:
 	rm -f ./Log.out
 	rm -f ./ref_annot.long_readthru_introns_removed.gtf
