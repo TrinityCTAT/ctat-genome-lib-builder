@@ -9,7 +9,7 @@ use lib ("$FindBin::Bin/lib");
 use Pipeliner;
 use Cwd;
 use File::Path;
-use Fasta_reader;
+
 
 ## Note, ideas related to IGH/IGL super-locus creation and masking out pseudogenes derive from Daniel Nicorici and FusionCatcher (personal comm. w/ Daniel).
 
