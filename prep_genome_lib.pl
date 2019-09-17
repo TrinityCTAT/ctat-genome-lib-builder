@@ -9,6 +9,9 @@ use lib ("$FindBin::Bin/lib");
 use Pipeliner;
 use Cwd;
 use File::Path;
+use Fasta_reader;
+
+## Note, ideas related to IGH/IGL super-locus creation and masking out pseudogenes derive from Daniel Nicorici and FusionCatcher (personal comm. w/ Daniel).
 
 my $CPU = 4;
 my $outTmpDir=undef;
@@ -167,7 +170,10 @@ main: {
 
     if ($HUMAN_GENCODE_FILTER) {
             
-        $gtf_file = &filter_human_gencode_annotations($gtf_file);
+        #$gtf_file = &revise_human_gencode_annotations($gtf_file);
+        
+        $genome_fa_file = &revise_human_genome_sequence($genome_fa_file, $gtf_file);
+        
     }
     
     
@@ -379,11 +385,13 @@ sub check_for_required_tools {
     }
 
 }
-    
+
 ####
-sub filter_human_gencode_annotations {
+sub revise_human_gencode_annotations {
     my ($gtf_file) = @_;
 
+    print STDERR "-revising human gencode annotations\n";
+    
     my $pipeliner = new Pipeliner(-verbose => 2,
                                   -checkpoint_dir => '__gencode_refinement_chkpts');
 
@@ -397,7 +405,7 @@ sub filter_human_gencode_annotations {
     my $no_readthrus_gtf = "$gtf_file.feature_selected.noreadthrus";
 
 
-    my $cmd = "$UTILDIR/remove_long_intron_readthru_transcripts.pl $gtf_file.feature_selected 100000 > $no_readthrus_gtf";
+    $cmd = "$UTILDIR/remove_long_intron_readthru_transcripts.pl $gtf_file.feature_selected 100000 > $no_readthrus_gtf";
     $pipeliner->add_commands(new Command($cmd, "remove_readthrus.ok"));
     
         
@@ -444,5 +452,76 @@ sub filter_human_gencode_annotations {
 }
 
 
+####
+sub revise_human_genome_sequence {
+    my ($genome_fa_file, $gtf_file) = @_;
 
+    print STDERR "-revising human genome sequence\n";
+    
+    ## get list of regions to mask out:
+    my %chr_to_mask_regions;
+    {
+        open(my $fh, $gtf_file) or die "Error, cannot open file: $gtf_file";
+        while(<$fh>) {
+            my @x = split(/\t/);
+            if (scalar(@x) > 8 && $x[2] eq "exon") {
+                if ($x[8] =~ /gene_type \"([^\"]+)\"/) {
+                    my $gene_type = $1;
+                    
+                    ## masking out pseudogenes.
+                    if ($gene_type =~ /pseudogene/) {
+                        my ($chr, $lend, $rend) = ($x[0], $x[3], $x[4]);
+                        push (@{$chr_to_mask_regions{$chr}}, [$lend, $rend]);
+                    }
+                }
+            }
+        }
+    }
+
+    ## do masking:
+    my $fasta_reader = new Fasta_reader($genome_fa_file);
+    
+    my $adj_fasta_file = "$genome_fa_file.adjusted.fasta";
+    open(my $ofh, ">$adj_fasta_file") or die "Error, cannot write to $adj_fasta_file";
+    
+    while (my $seq_obj = $fasta_reader->next()) {
         
+        my $chr = $seq_obj->get_accession();
+        my $header = $seq_obj->get_header();
+        my $sequence = $seq_obj->get_sequence();
+
+        my $regions_aref = $chr_to_mask_regions{$chr};
+        if (ref $regions_aref) {
+            my @regions = @$regions_aref;
+            print STDERR "-masking " . scalar(@regions) . " pseudogene exonic regions for chr: $chr\n";
+            my @seqchars = split(//, $sequence);
+            my $counter = 0;
+            foreach my $region (@regions) {
+                my ($lend, $rend) = sort {$a<=>$b} @$region;
+                $counter++;
+                print STDERR "\t-[$counter] masking $chr $lend-$rend\n";
+                if ($rend - $lend > 1e6) {
+                    die "Error, this pseudogene looks too long!";
+                }
+                
+                for (my $i = $lend; $i <= $rend; $i++) {
+                    $seqchars[$i-1] = "N";
+                }
+            }
+            $sequence = join("", @seqchars);
+        }
+        
+        print STDERR "-writing masked sequence for chr: $chr.\n";
+        $sequence =~ s/(\S{60})/$1\n/g;
+        chomp $sequence;
+        
+        print $ofh ">$header\n$sequence\n";
+    }
+    
+    close $ofh;
+
+    print STDERR "-done refining genome sequence => $adj_fasta_file\n";
+    
+    return($adj_fasta_file);
+}
+

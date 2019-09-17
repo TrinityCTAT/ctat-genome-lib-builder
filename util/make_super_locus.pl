@@ -43,12 +43,26 @@ close $fh;
 
 my @collapsed_coords = &Overlap_piler::simple_coordsets_collapser(@coords);
 
+my @allcoords;
 foreach my $coordset (@collapsed_coords) {
     my ($lend, $rend) = @$coordset;
 
+    
     print join("\t", $CHR, "SuperLocus", "exon", $lend, $rend, ".", $ORIENT, ".",
                "gene_id \"$gene_id\"; transcript_id \"$trans_id\"; gene_name \"$gene_name\";") . "\n";
+
+
+    push (@allcoords, $lend, $rend);
 }
+
+## add full span exon.
+@allcoords = sort {$a<=>$b} @allcoords;
+
+my $extreme_lend = shift @allcoords;
+my $extreme_rend = pop @allcoords;
+
+print join("\t", $CHR, "SuperLocus-ext", "exon", $extreme_lend, $extreme_rend, ".", $ORIENT, ".",
+           "gene_id \"$gene_id-ext\"; transcript_id \"$trans_id-ext\"; gene_name \"$gene_name-ext\";") . "\n";
 
 exit(0);
 
