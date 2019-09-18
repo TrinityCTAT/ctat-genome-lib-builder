@@ -200,8 +200,13 @@ main: {
         my $new_gtf_file = "$gtf_file.revised.gtf";
         my $cmd = "$UTILDIR/revise_gencode_annotations.pl --gencode_gtf $gtf_file --out_gtf $new_gtf_file";
         $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/revised_gencode_annots.ok"));
+
+        my $customized_gtf = "$gtf_file.revised.custom.gtf";
+        $cmd = "$UTILDIR/add_gtf_custom_targets.pl --in_gtf $new_gtf_file --out_gtf $customized_gtf";
+        $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/customized_gtf.ok"));
         
-        $gtf_file = $new_gtf_file;
+        
+        $gtf_file = $customized_gtf;
         
         my $masked_genome_fa_file = "$genome_fa_file.pseudo_masked.fa";
         $cmd = "$UTILDIR/mask_pseudogenes_from_genome.pl --gencode_gtf $gtf_file --genome_fa $genome_fa_file --out_masked $masked_genome_fa_file";
