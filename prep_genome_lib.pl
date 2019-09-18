@@ -35,6 +35,9 @@ my $usage = <<__EOUSAGE__;
 #  --gtf <string>                  transcript structure annotation
 #                                     Note: can restrict to coding genes and lncRNAs
 #
+#  --dfam_db <string>              DNA transposable element database (Dfam.hmm), required for repeat masking.
+#
+#
 # Required by STAR
 #
 #  --max_readlength <int>          max length for an individual RNA-Seq read (ie. default: $max_readlength)
@@ -77,6 +80,8 @@ my $fusion_annot_lib;
 my $gmap_build_flag = 0;
 my $pfam_db = "";
 
+my $dfam_db = "";
+
 my $SKIP_STAR_FLAG = 0;
 my $STAR_ONLY_FLAG = 0;
 
@@ -87,7 +92,8 @@ my $HUMAN_GENCODE_FILTER = 0;
               # required for STAR-Fusion, FusionInspector, GMAP-fusion
               'genome_fa=s' => \$genome_fa_file,
               'gtf=s' => \$gtf_file,        
-            
+              'dfam_db=s' => \$dfam_db,
+              
               # required for star
               'max_readlength=i' => \$max_readlength,
               
@@ -127,7 +133,7 @@ if (@ARGV) {
 }
         
 
-my @required_tools = ("STAR", "makeblastdb", "blastn");
+my @required_tools = ("STAR", "makeblastdb", "blastn", "dfamscan.pl", "hmmscan", "nhmmscan");
 if ($STAR_ONLY_FLAG) {
     @required_tools = ("STAR");
 }
@@ -168,34 +174,45 @@ if ($missing_tool_flag) {
 
 main: {
 
-    if ($HUMAN_GENCODE_FILTER) {
-            
-        #$gtf_file = &revise_human_gencode_annotations($gtf_file);
-        
-        $genome_fa_file = &revise_human_genome_sequence($genome_fa_file, $gtf_file);
-        
-    }
-    
-    
-    my $pipeliner = new Pipeliner(-verbose => 2);
-    
-    #################
-    # Prep the genome
 
-    unless (-d $output_dir) {
-        mkpath($output_dir) or die "Error, cannot mkpath $output_dir";
-    }
 
     my $output_dir_checkpoints_dir = "$output_dir/__chkpts";
     unless (-d $output_dir_checkpoints_dir) {
         mkpath($output_dir_checkpoints_dir) or die "Error, cannot mkpath $output_dir_checkpoints_dir";
     }
 
+    #################
+    # Prep the genome
+
+    unless (-d $output_dir) {
+        mkpath($output_dir) or die "Error, cannot mkpath $output_dir";
+    }
+    
     my $local_checkpoints_dir = "__loc_chkpts";
     unless (-d $local_checkpoints_dir) {
         mkpath($local_checkpoints_dir) or die "Error, cannot mkpath $local_checkpoints_dir";
     }
+    
+    my $pipeliner = new Pipeliner(-verbose => 2); ## going to need precise control over the checkpoints dir.
+    
+    if ($HUMAN_GENCODE_FILTER) {
         
+        my $new_gtf_file = "$gtf_file.revised.gtf";
+        my $cmd = "$UTILDIR/revise_gencode_annotations.pl --gencode_gtf $gtf_file --out_gtf $new_gtf_file";
+        $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/revised_gencode_annots.ok"));
+        
+        $gtf_file = $new_gtf_file;
+        
+        my $masked_genome_fa_file = "$genome_fa_file.pseudo_masked.fa";
+        $cmd = "$UTILDIR/mask_pseudogenes_from_genome.pl --gencode_gtf $gtf_file --genome_fa $genome_fa_file --out_masked $masked_genome_fa_file";
+        $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/pseudo_mask_genome.ok"));
+
+        $genome_fa_file = $masked_genome_fa_file;
+                
+    }
+    
+    
+    
     my $cmd = "cp $genome_fa_file $output_dir/ref_genome.fa";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_genome.fa.ok"));
     
@@ -254,17 +271,22 @@ main: {
     $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl $output_dir/ref_annot.gtf $output_dir/ref_genome.fa CDSplus > ref_annot.cdsplus.fa";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdsplus.fa.ok"));
 
-    $cmd = "makeblastdb -in ref_annot.cdsplus.fa -dbtype nucl";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdsplus.fa.blidx.ok"));
-
-    $cmd = "blastn -query ref_annot.cdsplus.fa -db ref_annot.cdsplus.fa -max_target_seqs 10000 -outfmt 6 -evalue 1e-10 -num_threads $CPU -dust no > ref_annot.cdsplus.allvsall.outfmt6";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdsplus.allvsall.outfmt6.ok"));
+    # repeat masking of transposable elements.
+    $cmd = "$UTILDIR/dfam_repeat_masker.pl --dfam_hmm $dfam_db --target_fa ref_annot.cdsplus.fa --out_masked ref_annot.cdsplus.dfam_masked.fa --CPU $CPU";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdsplus.fa.dfam_masked.ok"));
     
-    $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/blast_outfmt6_replace_trans_id_w_gene_symbol.pl  ref_annot.cdsplus.fa ref_annot.cdsplus.allvsall.outfmt6 | gzip > ref_annot.cdsplus.allvsall.outfmt6.genesym.gz\" ";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdsplus.allvsall.outfmt6.genesym.gz.ok"));
+
+    $cmd = "makeblastdb -in ref_annot.cdsplus.dfam_masked.fa -dbtype nucl";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdsplus.dfam_masked.fa.blidx.ok"));
+
+    $cmd = "blastn -query ref_annot.cdsplus.dfam_masked.fa -db ref_annot.cdsplus.dfam_masked.fa -max_target_seqs 10000 -outfmt 6 -evalue 1e-10 -num_threads $CPU -dust no > ref_annot.cdsplus.dfam_masked.allvsall.outfmt6";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdsplus.dfam_masked.allvsall.outfmt6.ok"));
+    
+    $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/blast_outfmt6_replace_trans_id_w_gene_symbol.pl ref_annot.cdsplus.dfam_masked.fa ref_annot.cdsplus.dfam_masked.allvsall.outfmt6 | gzip > ref_annot.cdsplus.dfam_masked.allvsall.outfmt6.genesym.gz\" ";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdsplus.dfam_masked.allvsall.outfmt6.genesym.gz.ok"));
 
     # index the blast hits:
-    $cmd = "$UTILDIR/index_blast_pairs.pl $output_dir/blast_pairs.idx ref_annot.cdsplus.allvsall.outfmt6.genesym.gz";
+    $cmd = "$UTILDIR/index_blast_pairs.pl $output_dir/blast_pairs.idx ref_annot.cdsplus.dfam_masked.allvsall.outfmt6.genesym.gz";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/blast_pairs.idx.ok"));
     
     # remove blast pairs between genes that physically overlap on the genome
@@ -385,143 +407,3 @@ sub check_for_required_tools {
     }
 
 }
-
-####
-sub revise_human_gencode_annotations {
-    my ($gtf_file) = @_;
-
-    print STDERR "-revising human gencode annotations\n";
-    
-    my $pipeliner = new Pipeliner(-verbose => 2,
-                                  -checkpoint_dir => '__gencode_refinement_chkpts');
-
-    ## filter out the IG features that we'll add back later as super-loci
-
-    my $cmd = "bash -c \"set -euxo pipefail; cat $gtf_file |  egrep -v 'IG_V_gene|IG_C_gene|IG_D_gene|IG_J_gene' > $gtf_file.feature_selected\" ";
-    $pipeliner->add_commands(new Command($cmd, "feature_selection.ok"));
-    
-    
-    ## remove readthru transcripts
-    my $no_readthrus_gtf = "$gtf_file.feature_selected.noreadthrus";
-
-
-    $cmd = "$UTILDIR/remove_long_intron_readthru_transcripts.pl $gtf_file.feature_selected 100000 > $no_readthrus_gtf";
-    $pipeliner->add_commands(new Command($cmd, "remove_readthrus.ok"));
-    
-        
-    ########################
-    ## create IGH superlocus
-    $cmd = "bash -c \"set -euxo pipefail; cat $gtf_file | egrep 'IG_V_gene|IG_C_gene|IG_D_gene|IG_J_gene' | awk '{ if (\\\$3 == \\\"exon\\\") { print } }' | egrep ^chr14  > IGH_locus.gtf\"";
-    $pipeliner->add_commands(new Command($cmd, "igh_locus.ok"));
-
-    $cmd = "$UTILDIR/make_super_locus.pl IGH_locus.gtf IGH\@ IGH.g\@ IGH.t\@ > IGH.superlocus.gtf";
-    $pipeliner->add_commands(new Command($cmd, "igh_superlocus.ok"));
-
-    $cmd = "bash -c \"set -euxo pipefail; cat IGH.superlocus.gtf | perl -lane 's/IGH/IGH-/g; print;'  | perl -lane '\@x = split(/\\t/); \\\$x[6] = \\\"+\\\"; print join(\\\"\\t\\\", \@x);' >  IGH.superlocus.revcomp.gtf\" ";
-    $pipeliner->add_commands(new Command($cmd, "igh_superlocus.revcomp.ok") );
-
-    
-    ########################
-    ## create IGL superlocus
-    
-    ## extract the exon features for IGL
-    $cmd = "bash -c \"set -euxo pipefail; cat $gtf_file | egrep 'IG_V_gene|IG_C_gene|IG_D_gene|IG_J_gene' | awk '{ if (\\\$3 == \\\"exon\\\") { print } }' | egrep ^chr22 > IGL_locus.gtf\" ";
-    $pipeliner->add_commands(new Command($cmd, "igl_locus.ok") );
-    
-    ## make IGL super-locus
-    $cmd = "$UTILDIR/make_super_locus.pl IGL_locus.gtf IGL\@ IGL.g\@ IGL.t\@ > IGL.superlocus.gtf";
-    $pipeliner->add_commands(new Command($cmd, "igl_superlocus.ok"));
-    
-    ## add reverse complement
-    $cmd = "bash -c \"set -euxo pipefail; cat IGL.superlocus.gtf  | perl -lane 's/IGL/IGL-/g; print;' | perl -lane '\@x = split(/\t/); \\\$x[6] = \\\"-\\\"; print join(\\\"\\t\\\", \@x);' >  IGL.superlocus.revcomp.gtf \" ";
-    $pipeliner->add_commands(new Command($cmd, "igl_superlocus.revcomp.ok") );
-
-
-    ##########################
-    ## Generate final annotation file:
-
-    my $refined_gtf = "$no_readthrus_gtf.refined.gtf";
-    $cmd = "cat $no_readthrus_gtf IGH.superlocus.gtf IGH.superlocus.revcomp.gtf IGL.superlocus.gtf IGL.superlocus.revcomp.gtf > $refined_gtf";
-    
-    $pipeliner->add_commands(new Command($cmd, "refined_gtf.ok"));
-    
-    $pipeliner->run();
-
-    return($refined_gtf);
-
-}
-
-
-####
-sub revise_human_genome_sequence {
-    my ($genome_fa_file, $gtf_file) = @_;
-
-    print STDERR "-revising human genome sequence\n";
-    
-    ## get list of regions to mask out:
-    my %chr_to_mask_regions;
-    {
-        open(my $fh, $gtf_file) or die "Error, cannot open file: $gtf_file";
-        while(<$fh>) {
-            my @x = split(/\t/);
-            if (scalar(@x) > 8 && $x[2] eq "exon") {
-                if ($x[8] =~ /gene_type \"([^\"]+)\"/) {
-                    my $gene_type = $1;
-                    
-                    ## masking out pseudogenes.
-                    if ($gene_type =~ /pseudogene/) {
-                        my ($chr, $lend, $rend) = ($x[0], $x[3], $x[4]);
-                        push (@{$chr_to_mask_regions{$chr}}, [$lend, $rend]);
-                    }
-                }
-            }
-        }
-    }
-
-    ## do masking:
-    my $fasta_reader = new Fasta_reader($genome_fa_file);
-    
-    my $adj_fasta_file = "$genome_fa_file.adjusted.fasta";
-    open(my $ofh, ">$adj_fasta_file") or die "Error, cannot write to $adj_fasta_file";
-    
-    while (my $seq_obj = $fasta_reader->next()) {
-        
-        my $chr = $seq_obj->get_accession();
-        my $header = $seq_obj->get_header();
-        my $sequence = $seq_obj->get_sequence();
-
-        my $regions_aref = $chr_to_mask_regions{$chr};
-        if (ref $regions_aref) {
-            my @regions = @$regions_aref;
-            print STDERR "-masking " . scalar(@regions) . " pseudogene exonic regions for chr: $chr\n";
-            my @seqchars = split(//, $sequence);
-            my $counter = 0;
-            foreach my $region (@regions) {
-                my ($lend, $rend) = sort {$a<=>$b} @$region;
-                $counter++;
-                print STDERR "\t-[$counter] masking $chr $lend-$rend\n";
-                if ($rend - $lend > 1e6) {
-                    die "Error, this pseudogene looks too long!";
-                }
-                
-                for (my $i = $lend; $i <= $rend; $i++) {
-                    $seqchars[$i-1] = "N";
-                }
-            }
-            $sequence = join("", @seqchars);
-        }
-        
-        print STDERR "-writing masked sequence for chr: $chr.\n";
-        $sequence =~ s/(\S{60})/$1\n/g;
-        chomp $sequence;
-        
-        print $ofh ">$header\n$sequence\n";
-    }
-    
-    close $ofh;
-
-    print STDERR "-done refining genome sequence => $adj_fasta_file\n";
-    
-    return($adj_fasta_file);
-}
-

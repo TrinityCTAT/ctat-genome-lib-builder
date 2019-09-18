@@ -1,7 +1,7 @@
 
 
 test:
-	../../prep_genome_lib.pl  --genome_fa data/small.fa --gtf data/small.gtf
+	../../prep_genome_lib.pl  --genome_fa data/small.fa --gtf data/small.gtf --dfam_db /seq/RNASEQ/TOOLS/DFAM/Dfam.hmm
 
 
 test_docker:
