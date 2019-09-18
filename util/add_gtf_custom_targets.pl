@@ -70,10 +70,9 @@ main: {
     my %chr_gene_to_span_n_orient = &parse_gene_spans($in_gtf);
 
     
-    my $custom_targets = "$tmpdir/custom_targets.gtf";
+    my $custom_targets = "$tmpdir/custom_targets.$$.gtf";
     open(my $ofh, ">$custom_targets") or die "Error, cannot write to file: $custom_targets";
     
-
     { 
         
         ## CRLF2
