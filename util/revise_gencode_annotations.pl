@@ -7,6 +7,7 @@ use Getopt::Long qw(:config posix_default no_ignore_case bundling pass_through);
 use FindBin;
 use lib ("$FindBin::Bin/../lib");
 use Pipeliner;
+use File::Basename;
 
 
 my $usage = <<__EOUSAGE__;
@@ -62,13 +63,13 @@ main: {
                                   -checkpoint_dir => $tmpdir);
 
     ## filter out the IG features that we'll add back later as super-loci
-    my $cmd = "bash -c \"set -euxo pipefail; cat $gtf_file |  egrep -v 'IG_V_gene|IG_C_gene|IG_D_gene|IG_J_gene' > $tmpdir/$gtf_file.feature_selected\" ";
+    my $feature_selected_gtf = "$tmpdir/" . basename($gtf_file) . ".feature_selected";
+    my $cmd = "bash -c \"set -euxo pipefail; cat $gtf_file |  egrep -v 'IG_V_gene|IG_C_gene|IG_D_gene|IG_J_gene' > $feature_selected_gtf\" ";
     $pipeliner->add_commands(new Command($cmd, "feature_selection.ok"));
         
     ## remove readthru transcripts
-    my $no_readthrus_gtf = "$tmpdir/$gtf_file.feature_selected.noreadthrus";
-
-    $cmd = "$UTILDIR/remove_long_intron_readthru_transcripts.pl $tmpdir/$gtf_file.feature_selected 100000 > $no_readthrus_gtf";
+    my $no_readthrus_gtf = "$feature_selected_gtf.noreadthrus";
+    $cmd = "$UTILDIR/remove_long_intron_readthru_transcripts.pl $feature_selected_gtf 100000 > $no_readthrus_gtf";
     $pipeliner->add_commands(new Command($cmd, "remove_readthrus.ok"));
         
     ########################
