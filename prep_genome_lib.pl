@@ -311,9 +311,9 @@ main: {
     
     my $dfam_masked_cdna = "ref_annot.cdna.dfam_masked.fa";
     
-    $cmd = "$UTILDIR/dfam_repeat_masker.pl --dfam_hmm $dfam_db --target_fa ref_annot.cdsplus.fa --out_masked $dfam_masked_cdna --CPU $CPU";
+    $cmd = "$UTILDIR/dfam_repeat_masker.pl --dfam_hmm $dfam_db --target_fa ref_annot.cdna.fa --out_masked $dfam_masked_cdna --CPU $CPU";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdna.ok"));
-
+    
     $cmd = "makeblastdb -in $dfam_masked_cdna -dbtype nucl";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdna.blidx.ok"));
     
