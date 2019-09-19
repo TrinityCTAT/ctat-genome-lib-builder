@@ -24,7 +24,11 @@ my $usage = <<__EOUSAGE__;
 #
 # --out_masked <string>        path to masked fasta file
 #
+# optional:
+#
 # --CPU <int>                  num threads (default: $CPU)
+#
+# --hard                      do hard masking instead of soft masking (default is soft)
 #
 #######################################################
 
@@ -37,6 +41,7 @@ my $help_flag;
 my $dfam_hmm;
 my $target_fa;
 my $out_masked_fa;
+my $hard_mask_flag;
 
 &GetOptions ( 'h' => \$help_flag,
       
@@ -44,6 +49,7 @@ my $out_masked_fa;
               'target_fa=s' => \$target_fa,
               'out_masked=s' => \$out_masked_fa,
               'CPU=i' => \$CPU,
+              'hard' => \$hard_mask_flag,
     );
 
 if ($help_flag) { 
@@ -76,14 +82,14 @@ main: {
     while (my $seq_obj = $fasta_reader->next()) {
         my $acc = $seq_obj->get_accession();
         my $header = $seq_obj->get_header();
-        my $sequence = $seq_obj->get_sequence();
+        my $sequence = uc $seq_obj->get_sequence();
         
         if (my $repeat_regions_aref = $repeat_regions{$acc}) {
             my @seqchars = split(//, $sequence);
             foreach my $repeat_region_aref (@$repeat_regions_aref) {
                 my ($lend, $rend) = @$repeat_region_aref;
                 for (my $i = $lend; $i <= $rend; $i++) {
-                    $seqchars[$i-1] = "N";
+                    $seqchars[$i-1] = ($hard_mask_flag) ? "N" : lc($seqchars[$i-1]);
                 }
             }
             $sequence = join("", @seqchars);
@@ -97,7 +103,7 @@ main: {
     exit(0);
     
 }
-    
+
 
 ####
 sub parse_repeat_regions {
