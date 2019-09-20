@@ -35,9 +35,6 @@ my $usage = <<__EOUSAGE__;
 #  --gtf <string>                  transcript structure annotation
 #                                     Note: can restrict to coding genes and lncRNAs
 #
-#  --dfam_db <string>              DNA transposable element database (Dfam.hmm), required for repeat masking.
-#
-#
 # Required by STAR
 #
 #  --max_readlength <int>          max length for an individual RNA-Seq read (ie. default: $max_readlength)
@@ -45,6 +42,9 @@ my $usage = <<__EOUSAGE__;
 #  Misc options:
 #
 #  --output_dir <string>           output directory (default: $output_dir)
+#
+#  --dfam_db <string>              DNA transposable element database (Dfam.hmm), required for repeat masking. (** highly recommended **)
+#                                  (use organism-specific library if possible)
 #
 #  --fusion_annot_lib <string>     fusion annotation library (key/val pairs, tab-delimited)
 #
@@ -92,7 +92,6 @@ my $HUMAN_GENCODE_FILTER = 0;
               # required for STAR-Fusion, FusionInspector, GMAP-fusion
               'genome_fa=s' => \$genome_fa_file,
               'gtf=s' => \$gtf_file,        
-              'dfam_db=s' => \$dfam_db,
               
               # required for star
               'max_readlength=i' => \$max_readlength,
@@ -110,6 +109,7 @@ my $HUMAN_GENCODE_FILTER = 0;
               'fusion_annot_lib=s' => \$fusion_annot_lib,
    
               'pfam_db=s' => \$pfam_db,
+              'dfam_db=s' => \$dfam_db,
    
               'annot_filter_rule=s' => \$annot_filter_rule,
               
@@ -195,6 +195,8 @@ main: {
     
     my $pipeliner = new Pipeliner(-verbose => 2); ## going to need precise control over the checkpoints dir.
     
+    my $genome_fa_for_STAR_index = $genome_fa;
+
     if ($HUMAN_GENCODE_FILTER) {
         
         my $new_gtf_file = "$gtf_file.revised.gtf";
@@ -209,13 +211,12 @@ main: {
         $gtf_file = $customized_gtf;
         
         my $masked_genome_fa_file = "$genome_fa_file.pseudo_masked.fa";
-        $cmd = "$UTILDIR/mask_pseudogenes_from_genome.pl --gencode_gtf $gtf_file --genome_fa $genome_fa_file --out_masked $masked_genome_fa_file";
+        $cmd = "$UTILDIR/mask_pseudogenes_n_paralogs_from_genome.pl --gencode_gtf $gtf_file --genome_fa $genome_fa_file --out_masked $masked_genome_fa_file";
         $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/pseudo_mask_genome.ok"));
-
-        $genome_fa_file = $masked_genome_fa_file;
-                
+        
+        $genome_fa_for_STAR_index = $masked_genome_fa_file;
+        
     }
-    
     
     
     my $cmd = "cp $genome_fa_file $output_dir/ref_genome.fa";
@@ -229,8 +230,7 @@ main: {
     
     $cmd = "cp $gtf_file $output_dir/ref_annot.gtf";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_annot.gtf.ok"));
-
-
+    
     # extract exon records    
     $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/gtf_to_exon_gene_records.pl $output_dir/ref_annot.gtf  | sort -k 1,1 -k4,4g -k5,5g | uniq  > $output_dir/ref_annot.gtf.mini.sortu \" ";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_annot.gtf.mini.sortu.ok"));
@@ -247,7 +247,7 @@ main: {
         my $maybe_tmpdir= defined($outTmpDir)? " --outTmpDir $outTmpDir " : "";
         
         $cmd = "STAR --runThreadN $CPU --runMode genomeGenerate --genomeDir $star_index $maybe_tmpdir "
-            . " --genomeFastaFiles $output_dir/ref_genome.fa "
+            . " --genomeFastaFiles $genome_fa_for_STAR_index " ## using the pseudogene and paralog-masked genome here.
             . " --limitGenomeGenerateRAM 40419136213 "
             . " --genomeChrBinNbits 16 " # needed for >4k contigs w/ FI
             . " --sjdbGTFfile $gtf_file "
@@ -256,7 +256,7 @@ main: {
         $pipeliner->add_commands(new Command($cmd, "$star_index/build.ok"));
     
     }
-
+    
     if ($STAR_ONLY_FLAG) {
         $pipeliner->run();
         print STDERR "** --STAR_ONLY set, stopping now.\n";
@@ -273,28 +273,32 @@ main: {
 
     # CDS and ncRNA blastn for quick homology identification
     
-    $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl $output_dir/ref_annot.gtf $output_dir/ref_genome.fa CDSplus > ref_annot.cdsplus.fa";
+    my $ref_annot_cdsplus_fa = "ref_annot.cdsplus.fa";
+    
+    $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl --gtf_file $output_dir/ref_annot.gtf --genome_fa $output_dir/ref_genome.fa --seqType CDSplus > $ref_annot_cdsplus_fa";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdsplus.fa.ok"));
-
-
-    # repeat masking of transposable elements.
-    my $dfam_masked_cdsplus = "ref_annot.cdsplus.dfam_masked.fa";
     
-    $cmd = "$UTILDIR/dfam_repeat_masker.pl --dfam_hmm $dfam_db --target_fa ref_annot.cdsplus.fa --out_masked $dfam_masked_cdsplus --CPU $CPU";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdsplus.ok"));
+    if ($dfam_db) {
+        # repeat masking of transposable elements.
+        my $dfam_masked_cdsplus = "ref_annot.cdsplus.dfam_masked.fa";
+        
+        $cmd = "$UTILDIR/dfam_repeat_masker.pl --dfam_hmm $dfam_db --target_fa $ref_annot_cdsplus_fa --out_masked $dfam_masked_cdsplus --CPU $CPU";
+        $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdsplus.ok"));
+        
+        $ref_annot_cdsplus_fa = $dfam_masked_cdsplus;
+    }
     
+    $cmd = "makeblastdb -in $ref_annot_cdsplus_fa -dbtype nucl";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.blidx.ok"));
 
-    $cmd = "makeblastdb -in $dfam_masked_cdsplus -dbtype nucl";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdsplus.blidx.ok"));
-
-    $cmd = "blastn -query $dfam_masked_cdsplus -db $dfam_masked_cdsplus -max_target_seqs 10000 -outfmt 6 -evalue 1e-10 -num_threads $CPU -dust no -lcase_masking > $dfam_masked_cdsplus.allvsall.outfmt6";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdsplus.allvsall.outfmt6.ok"));
+    $cmd = "blastn -query $ref_annot_cdsplus_fa -db $ref_annot_cdsplus_fa -max_target_seqs 10000 -outfmt 6 -evalue 1e-10 -num_threads $CPU -dust no -lcase_masking > $ref_annot_cdsplus_fa.allvsall.outfmt6";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.allvsall.outfmt6.ok"));
     
-    $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/blast_outfmt6_replace_trans_id_w_gene_symbol.pl $dfam_masked_cdsplus $dfam_masked_cdsplus.allvsall.outfmt6 | gzip > $dfam_masked_cdsplus.allvsall.outfmt6.genesym.gz\" ";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdsplus.allvsall.outfmt6.genesym.gz.ok"));
+    $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/blast_outfmt6_replace_trans_id_w_gene_symbol.pl $ref_annot_cdsplus_fa $ref_annot_cdsplus_fa.allvsall.outfmt6 | gzip > $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz\" ";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz.ok"));
 
     # index the blast hits:
-    $cmd = "$UTILDIR/index_blast_pairs.pl $output_dir/blast_pairs.idx $dfam_masked_cdsplus.allvsall.outfmt6.genesym.gz";
+    $cmd = "$UTILDIR/index_blast_pairs.pl $output_dir/blast_pairs.idx $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/blast_pairs.idx.ok"));
     
     # remove blast pairs between genes that physically overlap on the genome
@@ -306,30 +310,35 @@ main: {
     # blast across full cDNA sequences
 
     # extract the cDNA sequences
-    $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl $gtf_file $genome_fa_file cDNA > ref_annot.cdna.fa";
+    my $ref_annot_cdna_fa = "ref_annot.cdna.fa";
+    $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl --gtf_file $gtf_file --genome_fa $genome_fa_file --seqType cDNA > $ref_annot_cdna_fa";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdna.fa.ok"));
     
-    my $dfam_masked_cdna = "ref_annot.cdna.dfam_masked.fa";
+    if ($dfam_db) {
+        my $dfam_masked_cdna = "ref_annot.cdna.dfam_masked.fa";
+        
+        $cmd = "$UTILDIR/dfam_repeat_masker.pl --dfam_hmm $dfam_db --target_fa ref_annot.cdna.fa --out_masked $dfam_masked_cdna --CPU $CPU";
+        $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdna.ok"));
+        
+        $ref_annot_cdna_fa = $ref_annot_cdna_fa;
+    }
     
-    $cmd = "$UTILDIR/dfam_repeat_masker.pl --dfam_hmm $dfam_db --target_fa ref_annot.cdna.fa --out_masked $dfam_masked_cdna --CPU $CPU";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdna.ok"));
+    $cmd = "makeblastdb -in $ref_annot_cdna_fa -dbtype nucl";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.blidx.ok"));
     
-    $cmd = "makeblastdb -in $dfam_masked_cdna -dbtype nucl";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdna.blidx.ok"));
+    $cmd = "blastn -query $ref_annot_cdna_fa -db $ref_annot_cdna_fa -max_target_seqs 10000 -outfmt 6 -evalue 1e-10 -num_threads $CPU -dust no -lcase_masking > $ref_annot_cdna_fa.allvsall.outfmt6";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.allvsall.outfmt6.ok"));
     
-    $cmd = "blastn -query $dfam_masked_cdna -db $dfam_masked_cdna -max_target_seqs 10000 -outfmt 6 -evalue 1e-10 -num_threads $CPU -dust no -lcase_masking > $dfam_masked_cdna.allvsall.outfmt6";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdna.allvsall.outfmt6.ok"));
-    
-    $cmd = "$UTILDIR/isoform_blast_gene_chr_conversion.pl --blast_outfmt6 $dfam_masked_cdna.allvsall.outfmt6 --gtf $gtf_file > $dfam_masked_cdna.allvsall.outfmt6.toGenes";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdna.allvsall.outfmt6.toGenes.ok"));
+    $cmd = "$UTILDIR/isoform_blast_gene_chr_conversion.pl --blast_outfmt6 $ref_annot_cdna_fa.allvsall.outfmt6 --gtf $gtf_file > $ref_annot_cdna_fa.allvsall.outfmt6.toGenes";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.allvsall.outfmt6.toGenes.ok"));
 
-    $cmd = "sort -k2,2 -k7,7 $dfam_masked_cdna.allvsall.outfmt6.toGenes > $dfam_masked_cdna.allvsall.outfmt6.toGenes.sorted";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdna.allvsall.outfmt6.toGenes.sorted.ok"));
+    $cmd = "sort -k2,2 -k7,7 $ref_annot_cdna_fa.allvsall.outfmt6.toGenes > $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted.ok"));
 
-    $cmd = "gzip $dfam_masked_cdna.allvsall.outfmt6.toGenes.sorted";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdna.allvsall.outfmt6.toGenes.sorted.gzip.ok"));
+    $cmd = "gzip $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted.gzip.ok"));
     
-    $cmd = "$UTILDIR/build_chr_gene_alignment_index.pl --blast_genes $dfam_masked_cdna.allvsall.outfmt6.toGenes.sorted.gz  --out_prefix $output_dir/trans.blast.align_coords";
+    $cmd = "$UTILDIR/build_chr_gene_alignment_index.pl --blast_genes $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted.gz  --out_prefix $output_dir/trans.blast.align_coords";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/cdna.blast.align_coords.ok"));
     
     

@@ -9,17 +9,57 @@ use Gene_obj_indexer;
 use GTF_utils;
 use Fasta_retriever;
 use Carp;
+use Getopt::Long qw(:config posix_default no_ignore_case bundling pass_through);
 
-my $usage = "\n\nusage: $0 gtf_file genome_db seqType=[cDNA|CDS|prot|CDSplus]\n\n";
+my $usage = <<__EOUSAGE__;
 
-my $gtf_file = $ARGV[0] or die $usage;
-my $fasta_db = $ARGV[1] or die $usage;
-my $seqType = $ARGV[2] or die $usage;
+#####################################################
+#
+#  --gtf_file <str>    gtf file
+#
+#  --genome_fa <str>   genome fasta file
+#
+#  --seqType <str>    cDNA|CDS|prot|CDSplus
+#
+# optional:
+#
+#  --no_pseudo        exclude pseudogenes
+#
+#####################################################
+
+__EOUSAGE__
+
+    ;
+
+
+
+my $gtf_file;
+my $fasta_db;
+my $seqType;
+my $no_pseudogene_flag = 0;
+
+my $help_flag;
+&GetOptions ( 'h' => \$help_flag,
+              
+              'gtf_file=s' => \$gtf_file,
+              'genome_fa=s' => \$fasta_db,
+              'seqType=s' => \$seqType,
+              
+              'no_pseudo' => \$no_pseudogene_flag,
+    );
+
+
+if ($help_flag) {
+    die $usage;
+}
+
+unless ($gtf_file && $fasta_db && $seqType) {
+    die $usage;
+}
 
 unless ($seqType =~ /^(cDNA|CDS|prot|CDSplus)$/) {
     die "Error, don't recognize seqType: $seqType, must be: cDNA|CDS|prot  ";
 }
-
 
 my $gene_obj_indexer = {};
     
@@ -28,7 +68,6 @@ my $gene_obj_indexer = {};
 
 
 my $fasta_retriever = new Fasta_retriever($fasta_db);
-
 
 ## associate all gene_ids with contigs
 my @all_gene_ids = keys %$gene_obj_indexer;
@@ -63,12 +102,20 @@ foreach my $asmbl_id (sort keys %contig_to_gene_list) {
         my $gene_obj_ref = $gene_obj_indexer->{$gene_id};
 
         $gene_obj_ref->create_all_sequence_types(\$genome_seq);
+
+        if ($no_pseudogene_flag && exists($gene_obj_ref->{gene_type}) && $gene_obj_ref->{gene_type} =~ /pseudogene/i) { 
+            next; 
+        }
         
         foreach my $isoform ($gene_obj_ref, $gene_obj_ref->get_additional_isoforms()) {
             
             my $isoform_id = $isoform->{Model_feat_name};
             my $gene_id = $isoform->{TU_feat_name};
-            
+        
+            if ($no_pseudogene_flag && exists($isoform->{transcript_type}) && $isoform->{transcript_type} =~ /pseudogene/i) { 
+                next; 
+            }   
+                
             my $seq = "";
             if ($seqType eq 'cDNA') {
                 $seq = $isoform->get_cDNA_sequence();
