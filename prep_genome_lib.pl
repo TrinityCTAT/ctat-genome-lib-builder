@@ -195,7 +195,7 @@ main: {
     
     my $pipeliner = new Pipeliner(-verbose => 2); ## going to need precise control over the checkpoints dir.
     
-    my $genome_fa_for_STAR_index = $genome_fa;
+    my $genome_fa_for_STAR_index = $genome_fa_file;
 
     if ($HUMAN_GENCODE_FILTER) {
         
