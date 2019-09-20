@@ -145,6 +145,12 @@ sub get_pseudogene_coordinates {
             if ($x[8] =~ /gene_type \"([^\"]+)\"/) {
                 my $gene_type = $1;
                 
+                ## customization for DUX4 pseudogenes labeled as coding genes in hg19 gencode v19
+                my $gene_name;
+                if ($x[8] =~ /gene_name \"([^\"]+)\"/) {
+                    $gene_name = $1;
+                }
+                
                 ## masking out pseudogenes.
                 if ($gene_type =~ /pseudogene/) {
                     my ($chr, $lend, $rend) = ($x[0], $x[3], $x[4]);
@@ -153,6 +159,6 @@ sub get_pseudogene_coordinates {
             }
         }
     }
-
+    
     return(%chr_to_mask_regions);
 }

@@ -12,7 +12,7 @@ use File::Basename;
 
 my $usage = <<__EOUSAGE__;
 
-All pseudogene regions get masked from the genome.
+Creates IGH and IGL super-loci
 
 ######################################################
 #
