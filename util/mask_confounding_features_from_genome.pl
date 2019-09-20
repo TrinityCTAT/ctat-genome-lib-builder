@@ -70,19 +70,14 @@ main: {
     my $pipeliner = new Pipeliner(-verbose => 2,
                                   -checkpoint_dir => $tmpdir);
 
-    my $cdna_file = "$tmpdir/cdna_noP.fa";
-    my $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl --gtf_file $gencode_gtf --genome_fa $genome_fa --seqType cDNA --no_pseudo > $cdna_file";
-    $pipeliner->add_commands(new Command($cmd, "cdna_noP.ok"));
-    $pipeliner->run();
-    
     my $paramask_file = "para.mask.list";
-    $cmd = "$UTILDIR/define_paralog_mask_targets.pl --gtf $gencode_gtf --cdna_fasta $cdna_file --tmpdir $tmpdir --output $paramask_file";
+    my $cmd = "$UTILDIR/define_paralog_mask_targets.pl --gtf $gencode_gtf --genome_fa $genome_fa --tmpdir $tmpdir --output $paramask_file";
     $pipeliner->add_commands(new Command($cmd, "define_para_mask.ok"));
     $pipeliner->run();
-
+    
     &append_mask_regions($paramask_file, \%chr_to_mask_regions);
     
-    ## do masking:
+    ## do making:
     my $fasta_reader = new Fasta_reader($genome_fa);
     
     open(my $ofh, ">$out_masked") or die "Error, cannot write to $out_masked";
@@ -162,3 +157,19 @@ sub get_pseudogene_coordinates {
     
     return(%chr_to_mask_regions);
 }
+
+####
+sub append_mask_regions {
+    my ($paramask_file, $chr_to_mask_regions_href) = @_;
+    
+    open(my $fh, $paramask_file) or die "Error, cannot open file: $paramask_file";
+    while(<$fh>) {
+        chomp;
+        my ($chr, $lend, $rend) = split(/\t/);
+        push (@{$chr_to_mask_regions_href->{$chr}}, [$lend, $rend]);
+    }
+    close $fh;
+
+    return;
+}
+

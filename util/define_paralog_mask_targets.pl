@@ -20,7 +20,7 @@ my $usage = <<__EOUSAGE__;
 #
 # --gtf <str>          input gtf file
 #
-# --cdna_fasta <str>   output gtf file
+# --genome_fa <str>    genome_fa 
 #
 # --tmpdir <str>       destination for intermediate outputs
 #
@@ -43,7 +43,7 @@ my $UTILDIR = $FindBin::Bin;
 my $help_flag;
 
 my $in_gtf;
-my $cdna_fasta;
+my $genome_fa;
 my $output_file;
 
 my $tmpdir = $ENV{TMPDIR} || "/tmp";
@@ -52,7 +52,7 @@ my $tmpdir = $ENV{TMPDIR} || "/tmp";
 &GetOptions ( 'h' => \$help_flag,
 
               'gtf=s' => \$in_gtf,
-              'cdna_fasta=s' => \$cdna_fasta,
+              'genome_fa=s' => \$genome_fa,
               
               'tmpdir=s' => \$tmpdir,
               'output=s' => \$output_file,
@@ -64,10 +64,12 @@ if ($help_flag) {
     die $usage;
 }
 
-unless ($in_gtf && $cdna_fasta && $tmpdir && $output_file) {
+unless ($in_gtf && $genome_fa && $tmpdir && $output_file) {
     die $usage;
 }
 
+
+my $CONFOUNDERS_FASTA = "$UTILDIR/data/confounders.fa";
 
 main: {
     
@@ -79,19 +81,38 @@ main: {
     my $pipeliner = new Pipeliner('-verbose' => 2,
                                   '-checkpoint_dir' => $chckpts_dir);
     
-    # run cdhit
-    my $cmd = "cd-hit-est -i $cdna_fasta -c 0.99 -aS 0.99 -s 0.9 -M 40000 -T $CPU -r 0 -d 0 -G 0 -n 11 -o $tmpdir/cdhit.results";
-    $pipeliner->add_commands(new Command($cmd, "cdhit.ok"));
     
+    my $blast_outfile = "$tmpdir/confounders.blastn.outfmt6";
+    my $cmd = "blastn -db $genome_fa -query $CONFOUNDERS_FASTA -outfmt 6 -perc_identity 90 > $blast_outfile";
+    $pipeliner->add_commands(new Command($cmd, "blast_confounders.ok"));
     $pipeliner->run();
     
-    my $clstr_file = "$tmpdir/cdhit.results.clstr";
+    my %chr_to_exclusion_zones = &get_gene_exclusion_zones($in_gtf, \@MANUALLY_DEFINED_REFERENCE_GENES);
     
-    my @gene_clusters = &get_gene_clusters($clstr_file, $in_gtf);
-    
-    
-    my @genes_isoforms_to_mask = &define_genes_n_isoforms_to_mask(\@gene_clusters, \@MANUALLY_DEFINED_REFERENCE_GENES, $in_gtf);
-    
+
+    open(my $ofh, ">$output_file") or confess "Error, cannot write to file: $output_file";
+    open(my $fh, $blast_outfile) or confess "Error, cannot read file: $blast_outfile";
+    while(my $line = <$fh>) {
+        chomp $line;
+        my @x = split(/\t/, $line);
+        
+        my $chr = $x[1];
+        my $query_acc = $x[0];
+        my $lend = $x[8];
+        my $rend = $x[9];
+        
+        ($lend, $rend) = sort {$a<=>$b} ($lend, $rend);
+        
+        if (&in_exclusion_zone($chr, $lend, $rend, \%chr_to_exclusion_zones)) {
+            print STDERR "-blast match to $query_acc in exclusion zone: $chr:$lend-$rend\n";
+        } 
+        else {
+            print STDERR "-blast match to $query_acc TARGETED FOR MASKING: $chr:$lend-$rend\n";
+            print $ofh join("\t", $chr, $lend, $rend) . "\n";
+        }
+    }
+    close $fh;
+    close $ofh;
     
     
     exit(0);
@@ -99,11 +120,13 @@ main: {
 
 
 ####
-sub parse_gene_name_info {
-    my ($gtf) = @_;
+sub get_gene_exclusion_zones {
+    my ($gtf, $exclusion_genes_aref) = @_;
         
-    my %trans_id_to_gene_name;
-    
+    my %exclusion_genes = map { + $_ => 1 } @$exclusion_genes_aref;
+        
+    my %chr_to_exclusion_zones;
+        
     open(my $fh, $gtf) or die "Error, cannot open file: $gtf";
     while(<$fh>) {
         if (/^\#/) { next; }
@@ -113,6 +136,10 @@ sub parse_gene_name_info {
         
         unless ($x[2] eq "transcript") { next; }
 
+        my $chr = $x[0];
+        my $lend = $x[3];
+        my $rend = $x[4];
+        
         my $info = $x[8];
         
         my ($gene_name, $gene_id, $transcript_id);
@@ -129,138 +156,31 @@ sub parse_gene_name_info {
             $transcript_id = $1;
         }
         
-        my $gene_name_use = ($gene_name) ? $gene_name : $gene_id;
+                
 
-        unless ($transcript_id && $gene_name_use) {
+        unless ($transcript_id && ($gene_id || $gene_name)) {
             print STDERR "-warning, missing transcript_id or (gene_name|gene_id) info in $info\n";
             next;
         }
         
-        $trans_id_to_gene_name{$transcript_id} = $gene_name_use;
+        if ( ($gene_id && $exclusion_genes{$gene_id}) 
+             ||
+             ($gene_name && $exclusion_genes{$gene_name}) ) {
+            
+            
+            push(@{$chr_to_exclusion_zones{$chr}}, [$lend, $rend]);
+            
+            my $gene_val_report = ($gene_id && $exclusion_genes{$gene_id}) ? $gene_id : $gene_name;
+            
+            print STDERR "-adding mask exclusion zone for $gene_val_report $chr:$lend-$rend\n";
+        }
     }
     close $fh;
     
-    return(%trans_id_to_gene_name);
-
-}
-
-####
-sub get_gene_clusters {
-    my ($clstr_file, $in_gtf) = @_;
-    
-    my %trans_id_to_gene_name = &parse_gene_name_info($in_gtf);
-    
-    my $gene_clusters_file = "$clstr_file.w_genes";
-    open(my $ofh, ">$gene_clusters_file") or die "Error, cannot write to $gene_clusters_file";
-    
-
-    my @clusters;
-    
-    my $curr_cluster_aref = [];
-    my %genes_seen;
-    my @text_rows;
-    my $ref_gene = "";
-
-    open(my $fh, $clstr_file) or die "Error, cannot open file: $clstr_file";
-    while(my $line = <$fh>) {
-        chomp $line;
-        if ($line =~ /^>/) {
-            # process prev cluster.
-            my $num_genes_seen = scalar(keys(%genes_seen));
-            if ($num_genes_seen > 1) {
-                ## keeper.
-                push (@clusters, { num_genes => $num_genes_seen,
-                                   text_blurb => join("\n", @text_rows) . "\n",
-                                   trans_n_genes => $curr_cluster_aref,
-                                   ref_gene => $ref_gene,
-                      } );
-            }
-            
-            # start a new cluster.
-            $curr_cluster_aref = [];
-            %genes_seen = ();
-            @text_rows = ($line);
-            $ref_gene = "";
-
-            print $ofh "$line\n";
-        }
-        else {
-            chomp $line;
-            $line =~ s/\s+$//;
-            my ($index, $len, $trans_id, $rest) = split(/\s+/, $line, 4);
-            $trans_id =~ s/^>//;
-            $trans_id =~ s/\.+$//;
-            my $gene_name = $trans_id_to_gene_name{$trans_id} or confess "Error, no gene name found for $trans_id";
-            
-            $len =~ s/,$//;
-            
-            my $outline = join("\t", $index, $len, $trans_id, $gene_name, $rest);
-            print $ofh "$outline\n";
-            push (@$curr_cluster_aref, [$trans_id, $gene_name]);
-            push (@text_rows, $outline);
-            $genes_seen{$gene_name} = 1;
-            if ($rest eq "*") {
-                $ref_gene = $gene_name;
-            }
-        }
-    }
-
-    # get last one.
-    my $num_genes_seen = scalar(keys(%genes_seen));
-    if ($num_genes_seen > 1) {
-        ## keeper.
-        push (@clusters, { num_genes => $num_genes_seen,
-                           text_blurb => join("\n", @text_rows) . "\n",
-                           trans_n_genes => $curr_cluster_aref,
-                           ref_gene => $ref_gene,
-              } );
-    }
-    
-    
-    close $fh;
-    close $ofh;
-    
-
-    # write sorted cluster output file.
-    @clusters = reverse sort {$a->{num_genes} <=> $b->{num_genes}
-                              ||
-                                  length($a->{text_blurb}) <=> length($b->{text_blurb}) } @clusters;
-    
-    
-    {
-        my $ordered_multi_gene_clusters_file = "$clstr_file.w_genes.ordered_multi_gene_clusters";
-        open(my $ofh, ">$ordered_multi_gene_clusters_file") or die "Error, cannot write to $ordered_multi_gene_clusters_file";    
-        foreach my $cluster (@clusters) {
-            print $ofh $cluster->{text_blurb};
-        }
-        close $ofh;
-    }
-    
-
-    return (@clusters);
-}
-
-
-####
-sub define_genes_n_isoforms_to_mask {
-    my ($gene_clusters_aref, $manually_defined_ref_genes, $gtf_file) = @_;
-
-    my %REFGENES = map { + $_ => 1 } @$manually_defined_ref_genes;
-    
-    my %gene_name_to_trans;
-    my %trans_to_chr_coordspans;
-    &get_gtf_info($gtf_file, \%gene_name_to_trans, \%trans_to_chr_coordspans);
-    
-    ## populate pre-selected regions.
-    my %chr_to_selected_regions;
-    foreach my $gene_name (keys %REFGENES) {
-        &add_isoform_exclusion_regions($gene_name, \%chr_to_selected_regions, \%gene_name_to_trans, \%trans_to_chr_coordspans);
-    }
-    
-    foreach my $gene_cluster (@$gene_clusters_aref) {
-        // unfinished....  this is not actually solving the problem I thought it would...
+    return(%chr_to_exclusion_zones);
     
 }
+
 
 ####
 sub add_isoform_eclusion_regions {
@@ -337,4 +257,19 @@ sub get_gtf_info {
     return;
 }
             
-            
+####
+sub in_exclusion_zone {
+    my ($chr, $lend, $rend, $chr_to_exclusion_zones_href) = @_;
+
+    if (exists $chr_to_exclusion_zones_href->{$chr}) {
+        
+        foreach my $coordset (@{$chr_to_exclusion_zones_href->{$chr}}) {
+            my ($zone_lend, $zone_rend) = @$coordset;
+            if ($lend < $zone_rend && $rend > $zone_lend) {
+                return(1); # yes, in exclusion zone.
+            }
+        }
+    }
+
+    return(0); # no, not in exclusion zone
+}
