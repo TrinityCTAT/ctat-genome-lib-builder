@@ -224,7 +224,14 @@ main: {
     
     $cmd = "samtools faidx $output_dir/ref_genome.fa";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_genome_fai.ok"));
-        
+
+
+    #################
+    ## make blastable
+    $cmd = "makeblastdb -in $output/ref_genome.fa -dbtype nucl";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/makeblastdb.ok"));
+    
+    
     ###############################
     ## and copy the annotation file
     
