@@ -102,6 +102,16 @@ main: {
         print $ofh "$custom_gtf";
         
     }
+
+    
+    {
+        ## DUX4 chr4 - add 10kb upstream
+        
+        print STDERR "-adding custom DUX4 entry\n";
+        my $dux4_struct = $chr_gene_to_span_n_orient{"chr4:DUX4"} or confess "Error, cannot find gene struct for chr4:DUX4 based on $in_gtf";
+        my $custom_gtf = &get_custom_RNA_gtf($dux4_struct, "chr4", "DUX4", "+", 10000, 0);
+        print $ofh $custom_gtf;
+    }
     
     close $ofh;
 
