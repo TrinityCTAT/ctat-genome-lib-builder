@@ -206,30 +206,3 @@ sub set_rel_coords {
     return;
 }
     
-
-####
-sub translate_to_genomic_coord {
-    my ($struct, $coord) = @_;
-
-    my $orient = $struct->{orient};
-
-    my @exons = @{$struct->{exons}};
-    foreach my $exon (@exons) {
-
-        if ($exon->{rel_lend} <= $coord && $exon->{rel_rend} >= $coord) {
-
-            my $delta = $coord - $exon->{rel_lend};
-
-            if ($orient eq '+') {
-                return($exon->{lend} + $delta);
-            }
-            else {
-                # reverse strand
-                return($exon->{rend} - $delta);
-            }
-        }
-    }
-
-
-    confess "Error, didn't locate coordinate $coord within " . Dumper($struct);
-}
