@@ -133,10 +133,19 @@ if (@ARGV) {
 }
         
 
-my @required_tools = ("STAR", "makeblastdb", "blastn", "dfamscan.pl", "hmmscan", "nhmmscan");
+my @required_tools = ("STAR", "makeblastdb", "blastn");
+
+if ($dfam_db) {
+    push (@required_tools, "dfamscan.pl", "nhmmscan");
+}
+if ($pfam_db) {
+    push (@required_tools, "hmmscan");
+}
+
 if ($STAR_ONLY_FLAG) {
     @required_tools = ("STAR");
 }
+
 if ($gmap_build_flag) {
     push (@required_tools, "gmap_build");
 }
@@ -330,10 +339,10 @@ main: {
         $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdna.ok"));
         
         ## index the dfam regions along the genome.
-        $cmd = "$UTILDIR/isoform_dfam_gene_chr_conversion.pl --dfam_results $tmpdir/dfam.out.coords --gtf $gtf_file > $tmpdir/dfam.out.coords.genomic_regions.dat";
-        $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/dfam.out.coords.genomic_regions.ok"));
+        $cmd = "$UTILDIR/isoform_dfam_gene_chr_conversion.pl --dfam_results $tmpdir/dfam.out --gtf $gtf_file > $tmpdir/dfam.out.genomic_regions.dat";
+        $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/dfam.out.genomic_regions.ok"));
 
-        $cmd = "$UTILDIR/build_chr_dfam_index.pl --dfam_coords $tmpdir/dfam.out.coords.genomic_regions.dat --out_prefix $output_dir/dfam";
+        $cmd = "$UTILDIR/build_chr_dfam_index.pl --dfam_coords $tmpdir/dfam.out.genomic_regions.dat --out_prefix $output_dir/dfam";
         $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/index_dfam.ok"));
         
         $ref_annot_cdna_fa = $ref_annot_cdna_fa;
