@@ -204,6 +204,22 @@ main: {
     
     my $pipeliner = new Pipeliner(-verbose => 2); ## going to need precise control over the checkpoints dir.
     
+
+
+    my $cmd = "cp $genome_fa_file $output_dir/ref_genome.fa";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_genome.fa.ok"));
+    
+    $cmd = "samtools faidx $output_dir/ref_genome.fa";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_genome_fai.ok"));
+
+
+    #################
+    ## make blastable
+    $cmd = "makeblastdb -in $output_dir/ref_genome.fa -dbtype nucl";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/makeblastdb.ok"));
+    
+    my $genome_fa_file_for_blast = "$output_dir/ref_genome.fa";  ## reset so used below.
+    
     my $genome_fa_for_STAR_index = $genome_fa_file;
 
     if ($HUMAN_GENCODE_FILTER) {
@@ -220,27 +236,14 @@ main: {
         $gtf_file = $customized_gtf;
         
         my $masked_genome_fa_file = "$genome_fa_file.pseudo_masked.fa";
-        $cmd = "$UTILDIR/mask_pseudogenes_n_paralogs_from_genome.pl --gencode_gtf $gtf_file --genome_fa $genome_fa_file --out_masked $masked_genome_fa_file";
+        $cmd = "$UTILDIR/mask_confounding_features_from_genome.pl --gencode_gtf $gtf_file --genome_fa $genome_fa_file_for_blast --out_masked $masked_genome_fa_file";
         $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/pseudo_mask_genome.ok"));
         
         $genome_fa_for_STAR_index = $masked_genome_fa_file;
         
     }
     
-    
-    my $cmd = "cp $genome_fa_file $output_dir/ref_genome.fa";
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_genome.fa.ok"));
-    
-    $cmd = "samtools faidx $output_dir/ref_genome.fa";
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_genome_fai.ok"));
-
-
-    #################
-    ## make blastable
-    $cmd = "makeblastdb -in $output_dir/ref_genome.fa -dbtype nucl";
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/makeblastdb.ok"));
-    
-    
+        
     ###############################
     ## and copy the annotation file
     
