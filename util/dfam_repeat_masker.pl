@@ -30,6 +30,8 @@ my $usage = <<__EOUSAGE__;
 #
 # --hard                      do hard masking instead of soft masking (default is soft)
 #
+# --tmpdir <str>              dir for storing intermediates
+#
 #######################################################
 
 __EOUSAGE__
@@ -42,6 +44,7 @@ my $dfam_hmm;
 my $target_fa;
 my $out_masked_fa;
 my $hard_mask_flag;
+my $tmpdir;
 
 &GetOptions ( 'h' => \$help_flag,
       
@@ -50,6 +53,8 @@ my $hard_mask_flag;
               'out_masked=s' => \$out_masked_fa,
               'CPU=i' => \$CPU,
               'hard' => \$hard_mask_flag,
+    
+              'tmpdir=s' => \$tmpdir,
     );
 
 if ($help_flag) { 
@@ -63,7 +68,11 @@ unless ($dfam_hmm && $target_fa && $out_masked_fa) {
 main: {
     
     ## run dfamscan.pl
-    my $chckpts_dir = "__dfam_" . basename($target_fa);
+    my $chckpts_dir = $tmpdir;
+    unless ($chckpts_dir) {
+        $chckpts_dir = "__dfam_" . basename($target_fa);
+    }
+    
     my $repeat_regions_file = "$chckpts_dir/dfam.out";
     my $cmd = "dfamscan.pl -fastafile $target_fa -hmmfile $dfam_hmm -dfam_outfile $repeat_regions_file --masking_thresh --cpu $CPU";
     

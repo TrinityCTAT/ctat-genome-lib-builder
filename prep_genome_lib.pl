@@ -228,7 +228,7 @@ main: {
 
     #################
     ## make blastable
-    $cmd = "makeblastdb -in $output/ref_genome.fa -dbtype nucl";
+    $cmd = "makeblastdb -in $output_dir/ref_genome.fa -dbtype nucl";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/makeblastdb.ok"));
     
     
@@ -324,8 +324,17 @@ main: {
     if ($dfam_db) {
         my $dfam_masked_cdna = "ref_annot.cdna.dfam_masked.fa";
         
-        $cmd = "$UTILDIR/dfam_repeat_masker.pl --dfam_hmm $dfam_db --target_fa ref_annot.cdna.fa --out_masked $dfam_masked_cdna --CPU $CPU";
+        my $tmpdir = "__dfam_ref_annot.cdna.fa";
+        
+        $cmd = "$UTILDIR/dfam_repeat_masker.pl --dfam_hmm $dfam_db --target_fa ref_annot.cdna.fa --out_masked $dfam_masked_cdna --CPU $CPU --tmpdir $tmpdir";
         $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$dfam_masked_cdna.ok"));
+        
+        ## index the dfam regions along the genome.
+        $cmd = "$UTILDIR/isoform_dfam_gene_chr_conversion.pl --dfam_results $tmpdir/dfam.out.coords --gtf $gtf_file > $tmpdir/dfam.out.coords.genomic_regions.dat";
+        $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/dfam.out.coords.genomic_regions.ok"));
+
+        $cmd = "$UTILDIR/build_chr_dfam_index.pl --dfam_coords $tmpdir/dfam.out.coords.genomic_regions.dat --out_prefix $output_dir/dfam";
+        $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/index_dfam.ok"));
         
         $ref_annot_cdna_fa = $ref_annot_cdna_fa;
     }
