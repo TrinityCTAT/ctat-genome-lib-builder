@@ -348,7 +348,7 @@ main: {
         $cmd = "$UTILDIR/build_chr_dfam_index.pl --dfam_coords $tmpdir/dfam.out.genomic_regions.dat --out_prefix $output_dir/dfam";
         $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/index_dfam.ok"));
         
-        $ref_annot_cdna_fa = $ref_annot_cdna_fa;
+        $ref_annot_cdna_fa = $dfam_masked_cdna;
     }
     
     $cmd = "makeblastdb -in $ref_annot_cdna_fa -dbtype nucl";
@@ -367,7 +367,7 @@ main: {
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted.gzip.ok"));
     
     $cmd = "$UTILDIR/build_chr_gene_alignment_index.pl --blast_genes $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted.gz  --out_prefix $output_dir/trans.blast.align_coords";
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/cdna.blast.align_coords.ok"));
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/$ref_annot_cdna_fa.blast.align_coords.ok"));
     
     
     ####################################
@@ -382,15 +382,16 @@ main: {
     # 
 
     my $build_time = time();  ## so we always rerun the annotation build step, no skipping here...
+    ## TODO: include --force to rebuild
     # copy over the AnnotFilterRule:
     $cmd = "cp $annot_filter_rule $output_dir/.";
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/annotfiltrule_cp.$build_time.ok"));
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/annotfiltrule_cp.ok"));
     
     $cmd = "$UTILDIR/build_fusion_annot_db_index.pl --gene_spans $output_dir/ref_annot.gtf.gene_spans --out_db_file $output_dir/fusion_annot_lib.idx";
     if ($fusion_annot_lib) {
         $cmd .= " --key_pairs $fusion_annot_lib";
     }
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/_fusion_annot_lib.idx.$build_time.ok"));
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/_fusion_annot_lib.idx.ok"));
     
 
     ############################################################
