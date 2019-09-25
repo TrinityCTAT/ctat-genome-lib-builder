@@ -43,8 +43,10 @@ my $usage = <<__EOUSAGE__;
 #
 #  --output_dir <string>           output directory (default: $output_dir)
 #
-#  --dfam_db <string>              DNA transposable element database (Dfam.hmm), required for repeat masking. (** highly recommended **)
+#  --dfam_db <string>              DNA transposable element database (Dfam.hmm), required for repeat masking avoiding false homology detection.
 #                                  (use organism-specific library if possible)
+#                                  (get it from here: http://dfam.org/releases/Dfam_3.1/infrastructure/dfamscan/)
+#                                  Note, if keywords 'human' or 'mouse' are used, then these are retrieved at runtime.
 #
 #  --fusion_annot_lib <string>     fusion annotation library (key/val pairs, tab-delimited)
 #
@@ -52,6 +54,7 @@ my $usage = <<__EOUSAGE__;
 #
 #  --pfam_db <string>              /path/to/Pfam-A.hmm  
 #                                  (get it from here: ftp://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz)
+#                                  Note, if keyword 'current' is used, this is retrieved at runtime.
 #
 #  --CPU <int>                     number of threads (defalt: $CPU)
 #
@@ -79,7 +82,6 @@ my $fusion_annot_lib;
 
 my $gmap_build_flag = 0;
 my $pfam_db = "";
-
 my $dfam_db = "";
 
 my $SKIP_STAR_FLAG = 0;
@@ -124,7 +126,7 @@ if ($help_flag) {
     die $usage;
 }
 
-unless ($genome_fa_file && $gtf_file && $max_readlength) {
+unless ($genome_fa_file && $gtf_file && $max_readlength && $dfam_db) {
     die $usage;
 }
 
@@ -135,9 +137,10 @@ if (@ARGV) {
 
 my @required_tools = ("STAR", "makeblastdb", "blastn");
 
-if ($dfam_db) {
-    push (@required_tools, "dfamscan.pl", "nhmmscan");
-}
+
+# for dfam
+push (@required_tools, "dfamscan.pl", "nhmmscan");
+
 if ($pfam_db) {
     push (@required_tools, "hmmscan");
 }
@@ -183,7 +186,7 @@ if ($missing_tool_flag) {
 
 main: {
 
-
+    
 
     my $output_dir_checkpoints_dir = "$output_dir/__chkpts";
     unless (-d $output_dir_checkpoints_dir) {
@@ -204,8 +207,13 @@ main: {
     
     my $pipeliner = new Pipeliner(-verbose => 2); ## going to need precise control over the checkpoints dir.
     
-
-
+    if ($dfam_db eq "human" || $dfam_db eq "mouse") {
+        $dfam_db = &prep_dfam_db($dfam_db);
+    }
+    if ($pfam_db eq "current") {
+        $pfam_db = &prep_pfam_db();
+    }
+    
     my $cmd = "cp $genome_fa_file $output_dir/ref_genome.fa";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_genome.fa.ok"));
     
@@ -439,4 +447,54 @@ sub check_for_required_tools {
         #die "Error, missing at least one required tool. See error messages and perform required software installations before running.";
     }
 
+}
+
+####
+sub prep_dfam_db {
+    my ($dfam_db_type) = @_;
+
+    my $pipeliner = new Pipeliner(-verbose => 2,
+                                  -checkpoint_dir => "_dfam_db_prep_chckpts");
+
+    my $db_base_url = "http://dfam.org/releases/Dfam_3.1/infrastructure/dfamscan";
+    
+    my %db_filenames = ( 'human' => "homo_sapiens_dfam.hmm",
+                         'mouse' => "mus_musculus_dfam.hmm" );
+
+    my $db_filename = $db_filenames{$dfam_db_type} or confess "Error, cannot find url for type: $dfam_db_type"; 
+    my $url = $db_base_url . "/" . $db_filename;
+    
+    ## pull down database and indexes.
+    foreach my $index_type ("", "h3f", "h3i", "h3m", "h3p") {
+        my $wget_url = "$url";
+        if ($index_type) {
+            $wget_url .= ".$index_type";
+        }
+        my $cmd = "wget $wget_url";
+        $pipeliner->add_commands(new Command($cmd, "dfam.$index_type.ok"));
+    }
+
+    $pipeliner->run();
+    
+    return($db_filename);
+}
+
+####
+sub prep_pfam_db {
+    
+    my $pipeliner = new Pipeliner(-verbose => 2,
+                                  -checkpoint_dir => "_pfam_db_prep_chckpts");
+    
+    my $url = "ftp://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz";
+    
+    $pipeliner->add_commands(new Command("wget $url", "pfam_wget.ok"));
+
+    $pipeliner->add_commands(new Command("gunzip Pfam-A.hmm.gz", "pfam_gunzip.ok"));
+
+    $pipeliner->add_commands(new Command("hmmpress Pfam-A.hmm", "pfam_hmmpress.ok"));
+    
+
+    $pipeliner->run();
+    
+    return("Pfam-A.hmm");
 }
