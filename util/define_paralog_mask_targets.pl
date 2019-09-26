@@ -83,7 +83,7 @@ main: {
     
     
     my $blast_outfile = "$tmpdir/confounders.blastn.outfmt6";
-    my $cmd = "blastn -db $genome_fa -query $CONFOUNDERS_FASTA -outfmt 6 -perc_identity 90 > $blast_outfile";
+    my $cmd = "blastn -db $genome_fa -query $CONFOUNDERS_FASTA -outfmt 6 -evalue 1e-10 > $blast_outfile";
     $pipeliner->add_commands(new Command($cmd, "blast_confounders.ok"));
     $pipeliner->run();
     
