@@ -353,7 +353,7 @@ main: {
     $cmd = "sort -k2,2 -k7,7 $ref_annot_cdna_fa.allvsall.outfmt6.toGenes > $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.allvsall.blastn.outfmt6.toGenes.sorted.ok"));
 
-    $cmd = "gzip $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted";
+    $cmd = "gzip -f $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.allvsall.blastn.outfmt6.toGenes.sorted.gzip.ok"));
     
     $cmd = "$UTILDIR/build_chr_gene_alignment_index.pl --blast_genes $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted.gz  --out_prefix $output_dir/trans.blast.align_coords";
@@ -401,7 +401,7 @@ main: {
     if ($pfam_db) {
 
         # extract the protein sequences:
-        my $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl $gtf_file $genome_fa_file prot > ref_annot.pep.fa"; 
+        my $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl --gtf_file $gtf_file --genome_fa $genome_fa_file --seqType prot > ref_annot.pep.fa"; 
         $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/make_pep_file.ok"));
 
         # run pfam
