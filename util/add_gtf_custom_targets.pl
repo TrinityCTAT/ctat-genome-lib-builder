@@ -86,6 +86,16 @@ main: {
         my $crlf2_struct = $chr_gene_to_span_n_orient{"chrX:CRLF2"} or confess "Error, cannot find gene struct for chrX:CRLF2 based on $in_gtf";
         my $custom_gtf = &get_custom_RNA_gtf($crlf2_struct, "chrX", "CRLF2", "-", 50000, 0);
         print $ofh "$custom_gtf";
+
+
+        ## must include the Y chromosome allele
+        print STDERR "-adding custom CRLF2 entry (Y-allele)\n";
+        $crlf2_struct = $chr_gene_to_span_n_orient{"chrY:CRLF2"} or confess "Error, cannot find gene struct for chrY:CRLF2 based on $in_gtf";
+        $custom_gtf = &get_custom_RNA_gtf($crlf2_struct, "chrY", "CRLF2", "-", 50000, 0);
+        print $ofh "$custom_gtf";
+        
+
+
     }
     
     {
