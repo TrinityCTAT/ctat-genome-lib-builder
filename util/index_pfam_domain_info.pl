@@ -67,8 +67,8 @@ main: {
 
     }
 
-    $tied_hash = undef; # closes it
-
+    $tied_hash->store_key_value("geneABC--geneXYZ", "__placeholder_testval__");
+    
     print STDERR "done.\n";
     
     exit(0);

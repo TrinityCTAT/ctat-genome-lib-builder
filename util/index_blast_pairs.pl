@@ -56,6 +56,9 @@ main: {
             }
         }
     }
+
+
+    $idx->store_key_value("geneABC--geneXYZ", "__placeholder_testval__"); # for sanity checking
     
     print STDERR "-done creating index file: $output_index_filename\n\n";
 

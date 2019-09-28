@@ -132,6 +132,10 @@ main: {
 
 
     close $ofh;
+
+
+    $idx->store_key_value("geneABC--geneXYZ", "__placeholder_testval__"); # for sanity checks.
+    
     
     print STDERR "\n\nDone.\n";
     
