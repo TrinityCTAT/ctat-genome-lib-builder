@@ -16,4 +16,5 @@ clean:
 	rm -rf ./ctat_genome_lib_build_dir
 	rm -rf ./__loc_chkpts
 	rm -rf ./__dfam_ref*
-
+	rm -rf ./__gencode_refinement_chkpts
+	rm -f ./PFAM.domtblout.dat.gz
