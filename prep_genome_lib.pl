@@ -192,7 +192,7 @@ main: {
     unless (-d $output_dir_checkpoints_dir) {
         mkpath($output_dir_checkpoints_dir) or die "Error, cannot mkpath $output_dir_checkpoints_dir";
     }
-
+    
     #################
     # Prep the genome
 
@@ -315,6 +315,12 @@ main: {
         $ref_annot_cdsplus_fa = $dfam_masked_cdsplus;
     }
     
+    $cmd = "cp $ref_annot_cdsplus_fa $output_dir/ref_annot.cdsplus.fa";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/$ref_annot_cdsplus_fa.cp.ok"));
+
+    $cmd = "$UTILDIR/index_cdna_seqs.pl $output_dir/ref_annot.cdsplus.fa"; 
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/$ref_annot_cdsplus_fa.idx.ok"));
+        
     $cmd = "makeblastdb -in $ref_annot_cdsplus_fa -dbtype nucl";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.blidx.ok"));
 
@@ -324,14 +330,15 @@ main: {
     $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/blast_outfmt6_replace_trans_id_w_gene_symbol.pl $ref_annot_cdsplus_fa $ref_annot_cdsplus_fa.allvsall.outfmt6 | gzip > $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz\" ";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz.ok"));
 
+    $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/filter_overlapping_blast_hits.pl $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz $output_dir/ref_annot.gtf.gene_spans | gzip > $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.overlaps_filt.gz\" ";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.overlaps_filt.ok"));
+
+    $cmd = "cp $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.overlaps_filt.gz $output_dir/blast_pairs.dat.gz";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/cp_gene_blast_pairs.ok"));
+
     # index the blast hits:
-    $cmd = "$UTILDIR/index_blast_pairs.pl $output_dir/blast_pairs.idx $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz";
+    $cmd = "$UTILDIR/index_blast_pairs.pl $output_dir/blast_pairs.idx $output_dir/blast_pairs.dat.gz";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/blast_pairs.idx.ok"));
-    
-    # remove blast pairs between genes that physically overlap on the genome
-    $cmd = "$UTILDIR/index_blast_pairs.remove_overlapping_genes.pl $output_dir";
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/blast_pairs.idx.ovrem.ok"));
-    
     
     ##################################
     # blast across full cDNA sequences
@@ -341,6 +348,13 @@ main: {
     $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl --gtf_file $gtf_file --genome_fa $genome_fa_file --seqType cDNA > $ref_annot_cdna_fa";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdna.fa.ok"));
     
+    $cmd = "cp $ref_annot_cdna_fa $output_dir/$ref_annot_cdna_fa";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/cp_ref_annot_cdna.ok"));
+    
+    $cmd = "$UTILDIR/index_cdna_seqs.pl $output_dir/$ref_annot_cdna_fa";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/index_ref_annot_cdna.ok"));
+    
+
     $cmd = "makeblastdb -in $ref_annot_cdna_fa -dbtype nucl";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.blastidx.ok"));
     
@@ -356,8 +370,11 @@ main: {
     $cmd = "gzip -f $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.allvsall.blastn.outfmt6.toGenes.sorted.gzip.ok"));
     
-    $cmd = "$UTILDIR/build_chr_gene_alignment_index.pl --blast_genes $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted.gz  --out_prefix $output_dir/trans.blast.align_coords";
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/$ref_annot_cdna_fa.blastn.chr_gene_align_coords.ok"));
+    $cmd = "cp $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted.gz $output_dir/trans.blast.dat.gz";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/trans.blast.dat.cp.ok"));
+
+    $cmd = "$UTILDIR/build_chr_gene_alignment_index.pl --blast_genes $output_dir/trans.blast.dat.gz  --out_prefix $output_dir/trans.blast.align_coords";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/trans.blast.dat.index.ok"));
     
     
     ####################################
@@ -376,6 +393,15 @@ main: {
     # copy over the AnnotFilterRule:
     $cmd = "cp $annot_filter_rule $output_dir/.";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/annotfiltrule_cp.ok"));
+    
+    if ($fusion_annot_lib) {
+        unless ($fusion_annot_lib =~ /\.gz$/) {
+            die "Error, fusion annot lib: $fusion_annot_lib doesn't appear to be gzipped";
+        }
+        $cmd = "cp $fusion_annot_lib $output_dir/fusion_annot_lib.gz";
+        $pipeliner->add_commands(new Command($cmd, "fusion_annot_lib.cp.ok"));
+        $fusion_annot_lib = "$output_dir/fusion_annot_lib.gz";
+    }
     
     $cmd = "$UTILDIR/build_fusion_annot_db_index.pl --gene_spans $output_dir/ref_annot.gtf.gene_spans --out_db_file $output_dir/fusion_annot_lib.idx";
     if ($fusion_annot_lib) {
@@ -412,10 +438,13 @@ main: {
         $cmd= "gzip PFAM.domtblout.dat";
         $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/gzip_pfam.ok"));
 
-        # index the pfam hits:
-        $cmd = "$UTILDIR/index_pfam_domain_info.pl --pfam_domains PFAM.domtblout.dat.gz --genome_lib_dir $output_dir";
-        $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/index_pfam_hits.ok"));
+        $cmd = "cp PFAM.domtblout.dat.gz $output_dir/PFAM.domtblout.dat.gz";
+        $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/cp_pfam_dat.ok"));
 
+        # index the pfam hits:
+        $cmd = "$UTILDIR/index_pfam_domain_info.pl --pfam_domains $output_dir/PFAM.domtblout.dat.gz --genome_lib_dir $output_dir";
+        $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/index_pfam_hits.ok"));
+        
     }
     
     $pipeliner->run();

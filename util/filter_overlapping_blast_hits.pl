@@ -5,57 +5,44 @@ use warnings;
 use FindBin;
 use lib ("$FindBin::Bin/../lib");
 use Carp;
-use Process_cmd;
-use DB_File;
 
-my $usage = "\n\n\tusage: $0 ctat_genome_lib_dir\n\n";
 
-my $ctat_genome_lib_dir = $ARGV[0] or die $usage;
+my $usage = "\n\n\tusage: $0 gene_blast_pairs.gz ref_annot.gtf.gene_spans > gene_blast_pairs_overlaps_filt.gz\n\n";
 
+my $blast_pairs_gz = $ARGV[0] or die $usage;
+my $gene_spans_file = $ARGV[1] or die $usage;
 
 main: {
 
-    my $blast_idx = "$ctat_genome_lib_dir/blast_pairs.idx";
-    unless (-s $blast_idx) {
-        die "Error, cannot locate file: $blast_idx";
-    }
-
-    # make a dated copy of the original:
-    my $backup = $blast_idx . ".prev." . time();
-    print STDERR "-making a backup of the original index at: $backup\n";
-    &process_cmd("cp $blast_idx $backup");
-        
-    my $gene_spans_file = "$ctat_genome_lib_dir/ref_annot.gtf.gene_spans";
-    unless (-s $gene_spans_file) {
-        die "Error, cannot locate file: $gene_spans_file";
-    }
-        
-    my %idx;
-    
-    tie (%idx, 'DB_File', $blast_idx, O_RDWR, 0666, $DB_BTREE);
-    
-
     my %gene_to_span_info = &parse_gene_spans($gene_spans_file);
 
-    my $counter = 0;
-    foreach my $gene_pair (keys %idx) {
-        $counter++;
-        print STDERR "\r[$counter]   " if $counter % 100 == 0;
-        my ($geneA, $geneB) = split(/--/, $gene_pair);
-        if (&overlap($geneA, $geneB, \%gene_to_span_info)) {
-            print STDERR "-pruning: $gene_pair\n";
-            delete($idx{$gene_pair});
+    my %gene_pair_overlap_info;
+
+    my $count_removed = 0;
+
+    open(my $fh, "gunzip -c $blast_pairs_gz | ") or die "Error reading $blast_pairs_gz";
+    while(my $line = <$fh>) {
+        my ($geneA, $geneB, @rest) = split(/\t/, $line);
+        
+        my $gene_pair = join("--", sort ($geneA, $geneB));
+        my $overlaps = $gene_pair_overlap_info{$gene_pair};
+        if (! defined $overlaps) {
+            $overlaps = (&overlap($geneA, $geneB, \%gene_to_span_info)) ? "YES" : "NO";
+            $gene_pair_overlap_info{$overlaps} = $overlaps;
+        }
+        if ($overlaps eq "YES") {
+            $count_removed += 1;
+        }
+        else {
+            print $line;
         }
     }
-    
-    untie(%idx);
-        
-    print STDERR "-done updating blast index\n\n";
-    
-    exit(0);
-    
-}
+    close $fh;
 
+    print STDERR "-removed $count_removed blast entries involving overlapping genes\n";
+
+    exit(0);
+}
 
 ####
 sub parse_gene_spans {

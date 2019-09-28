@@ -1,7 +1,7 @@
 
 
 test:
-	../../prep_genome_lib.pl  --genome_fa data/small.fa --gtf data/small.gtf --dfam_db /seq/RNASEQ/TOOLS/DFAM/homo_sapiens_dfam.hmm
+	../../prep_genome_lib.pl  --genome_fa data/small.fa --gtf data/small.gtf --dfam_db data/dfam.mini.hmm
 
 
 test_docker:
@@ -15,3 +15,5 @@ clean:
 	rm -f ./ref_annot.*
 	rm -rf ./ctat_genome_lib_build_dir
 	rm -rf ./__loc_chkpts
+	rm -rf ./__dfam_ref*
+
