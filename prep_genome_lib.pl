@@ -446,6 +446,12 @@ main: {
         $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/index_pfam_hits.ok"));
         
     }
+
+
+    ## perform final validation:
+    $cmd = "$UTILDIR/validate_ctat_genome_lib.pl $output_dir";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/validate_ctat_genome_lib.ok"));
+    
     
     $pipeliner->run();
 
