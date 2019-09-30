@@ -15,5 +15,15 @@ fi
 
 set +e
 
-mv IGH* IGL* *.gtf.feature_selected *.gtf.feature_selected.noreadthrus Log.out *.nhr *.nin *nsq *.outfmt6 *.outfmt6.toGenes    $dirname/
+mv Pfam-A.* \
+    homo_sapiens_dfam.* \
+    *cmds \
+    ref_annot.cdsplus.dfam_masked.fa.n* \
+    *outfmt6 ref_annot.cdna.fa.n* \
+    *outfmt6.toGenes \
+    *ok \
+    *log \
+    __gencode_refinement_chkpts/gencode.v19.annotation.gtf* \
+    $dirname/
+
 
