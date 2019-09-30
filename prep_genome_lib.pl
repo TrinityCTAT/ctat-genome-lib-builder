@@ -399,7 +399,7 @@ main: {
             die "Error, fusion annot lib: $fusion_annot_lib doesn't appear to be gzipped";
         }
         $cmd = "cp $fusion_annot_lib $output_dir/fusion_annot_lib.gz";
-        $pipeliner->add_commands(new Command($cmd, "fusion_annot_lib.cp.ok"));
+        $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/fusion_annot_lib.cp.ok"));
         $fusion_annot_lib = "$output_dir/fusion_annot_lib.gz";
     }
     
