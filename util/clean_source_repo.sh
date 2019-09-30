@@ -23,7 +23,7 @@ mv Pfam-A.* \
     *outfmt6.toGenes \
     *ok \
     *log \
-    __gencode_refinement_chkpts/gencode.v19.annotation.gtf* \
+    __gencode_refinement_chkpts/gencode.*.annotation.gtf* \
     $dirname/
 
 
