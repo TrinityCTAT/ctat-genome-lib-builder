@@ -28,23 +28,18 @@ my $usage = <<__EOUSAGE__;
 
 ##################################################################################
 #
-#  Required by: STAR-Fusion and FusionInspector
+#  Required:
 #
 #  --genome_fa  <string>           genome fasta file
 #
 #  --gtf <string>                  transcript structure annotation
 #                                     Note: can restrict to coding genes and lncRNAs
-#
-# Required by STAR
-#
-#  --max_readlength <int>          max length for an individual RNA-Seq read (ie. default: $max_readlength)
+#  --dfam_db <string>              DNA transposable element database (Dfam.hmm), required for repeat masking. (** highly recommended **)
+#                                  (use organism-specific library if possible)
 #
 #  Misc options:
 #
 #  --output_dir <string>           output directory (default: $output_dir)
-#
-#  --dfam_db <string>              DNA transposable element database (Dfam.hmm), required for repeat masking. (** highly recommended **)
-#                                  (use organism-specific library if possible)
 #
 #  --fusion_annot_lib <string>     fusion annotation library (key/val pairs, tab-delimited)
 #
@@ -52,6 +47,8 @@ my $usage = <<__EOUSAGE__;
 #
 #  --pfam_db <string>              /path/to/Pfam-A.hmm  
 #                                  (get it from here: ftp://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz)
+#
+#  --max_readlength <int>          max length for an individual RNA-Seq read (ie. default: $max_readlength)
 #
 #  --CPU <int>                     number of threads (defalt: $CPU)
 #
