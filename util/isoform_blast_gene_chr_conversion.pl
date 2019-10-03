@@ -82,7 +82,7 @@ main: {
 
         if ($isoform_A eq $isoform_B) { next; } # no selfies
 
-        my $per_id = $x[3];
+        my $per_id = $x[2];
         my $E_value = $x[10];
 
         

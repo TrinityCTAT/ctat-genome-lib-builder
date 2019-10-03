@@ -53,4 +53,23 @@ sub examine_fusion_prediction {
 }
 
 
+
+####
+sub fusion_has_junction_reads_exception {
+    my ($fusion) = @_;
+
+    # these are fusions that are known to  have complex breakpoints, so we make an exception for them.
+    
+    ## ** implement your rules here.
+    
+
+    #if ($fusion =~ /^IGH.*--CRLF2$/ ||
+    #     $fusion =~ /^CRLF2--IGH/
+    #        ) {
+    #    return(1);
+    #}
+    
+    return(0); # by default, no exemption given.
+}
+
 1; #EOM

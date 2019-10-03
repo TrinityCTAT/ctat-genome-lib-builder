@@ -47,6 +47,7 @@ my $usage = <<__EOUSAGE__;
 #
 #  --pfam_db <string>              /path/to/Pfam-A.hmm  
 #                                  (get it from here: ftp://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz)
+#                                  Note, if keyword 'current' is used, this is retrieved at runtime.
 #
 #  --max_readlength <int>          max length for an individual RNA-Seq read (ie. default: $max_readlength)
 #
@@ -76,7 +77,6 @@ my $fusion_annot_lib;
 
 my $gmap_build_flag = 0;
 my $pfam_db = "";
-
 my $dfam_db = "";
 
 my $SKIP_STAR_FLAG = 0;
@@ -121,7 +121,7 @@ if ($help_flag) {
     die $usage;
 }
 
-unless ($genome_fa_file && $gtf_file && $max_readlength) {
+unless ($genome_fa_file && $gtf_file && $max_readlength && $dfam_db) {
     die $usage;
 }
 
@@ -132,9 +132,10 @@ if (@ARGV) {
 
 my @required_tools = ("STAR", "makeblastdb", "blastn");
 
-if ($dfam_db) {
-    push (@required_tools, "dfamscan.pl", "nhmmscan");
-}
+
+# for dfam
+push (@required_tools, "dfamscan.pl", "nhmmscan");
+
 if ($pfam_db) {
     push (@required_tools, "hmmscan");
 }
@@ -180,13 +181,13 @@ if ($missing_tool_flag) {
 
 main: {
 
-
+    
 
     my $output_dir_checkpoints_dir = "$output_dir/__chkpts";
     unless (-d $output_dir_checkpoints_dir) {
         mkpath($output_dir_checkpoints_dir) or die "Error, cannot mkpath $output_dir_checkpoints_dir";
     }
-
+    
     #################
     # Prep the genome
 
@@ -201,8 +202,13 @@ main: {
     
     my $pipeliner = new Pipeliner(-verbose => 2); ## going to need precise control over the checkpoints dir.
     
-
-
+    if ($dfam_db eq "human" || $dfam_db eq "mouse") {
+        $dfam_db = &prep_dfam_db($dfam_db);
+    }
+    if ($pfam_db eq "current") {
+        $pfam_db = &prep_pfam_db();
+    }
+    
     my $cmd = "cp $genome_fa_file $output_dir/ref_genome.fa";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_genome.fa.ok"));
     
@@ -304,6 +310,12 @@ main: {
         $ref_annot_cdsplus_fa = $dfam_masked_cdsplus;
     }
     
+    $cmd = "cp $ref_annot_cdsplus_fa $output_dir/ref_annot.cdsplus.fa";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/$ref_annot_cdsplus_fa.cp.ok"));
+
+    $cmd = "$UTILDIR/index_cdna_seqs.pl $output_dir/ref_annot.cdsplus.fa"; 
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/$ref_annot_cdsplus_fa.idx.ok"));
+        
     $cmd = "makeblastdb -in $ref_annot_cdsplus_fa -dbtype nucl";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.blidx.ok"));
 
@@ -313,14 +325,15 @@ main: {
     $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/blast_outfmt6_replace_trans_id_w_gene_symbol.pl $ref_annot_cdsplus_fa $ref_annot_cdsplus_fa.allvsall.outfmt6 | gzip > $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz\" ";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz.ok"));
 
+    $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/filter_overlapping_blast_hits.pl $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz $output_dir/ref_annot.gtf.gene_spans | gzip > $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.overlaps_filt.gz\" ";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.overlaps_filt.ok"));
+
+    $cmd = "cp $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.overlaps_filt.gz $output_dir/blast_pairs.dat.gz";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/cp_gene_blast_pairs.ok"));
+
     # index the blast hits:
-    $cmd = "$UTILDIR/index_blast_pairs.pl $output_dir/blast_pairs.idx $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz";
+    $cmd = "$UTILDIR/index_blast_pairs.pl $output_dir/blast_pairs.idx $output_dir/blast_pairs.dat.gz";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/blast_pairs.idx.ok"));
-    
-    # remove blast pairs between genes that physically overlap on the genome
-    $cmd = "$UTILDIR/index_blast_pairs.remove_overlapping_genes.pl $output_dir";
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/blast_pairs.idx.ovrem.ok"));
-    
     
     ##################################
     # blast across full cDNA sequences
@@ -330,6 +343,13 @@ main: {
     $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl --gtf_file $gtf_file --genome_fa $genome_fa_file --seqType cDNA > $ref_annot_cdna_fa";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/ref_annot.cdna.fa.ok"));
     
+    $cmd = "cp $ref_annot_cdna_fa $output_dir/$ref_annot_cdna_fa";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/cp_ref_annot_cdna.ok"));
+    
+    $cmd = "$UTILDIR/index_cdna_seqs.pl $output_dir/$ref_annot_cdna_fa";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/index_ref_annot_cdna.ok"));
+    
+
     $cmd = "makeblastdb -in $ref_annot_cdna_fa -dbtype nucl";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.blastidx.ok"));
     
@@ -342,11 +362,14 @@ main: {
     $cmd = "sort -k2,2 -k7,7 $ref_annot_cdna_fa.allvsall.outfmt6.toGenes > $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.allvsall.blastn.outfmt6.toGenes.sorted.ok"));
 
-    $cmd = "gzip $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted";
+    $cmd = "gzip -f $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdna_fa.allvsall.blastn.outfmt6.toGenes.sorted.gzip.ok"));
     
-    $cmd = "$UTILDIR/build_chr_gene_alignment_index.pl --blast_genes $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted.gz  --out_prefix $output_dir/trans.blast.align_coords";
-    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/$ref_annot_cdna_fa.blastn.chr_gene_align_coords.ok"));
+    $cmd = "cp $ref_annot_cdna_fa.allvsall.outfmt6.toGenes.sorted.gz $output_dir/trans.blast.dat.gz";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/trans.blast.dat.cp.ok"));
+
+    $cmd = "$UTILDIR/build_chr_gene_alignment_index.pl --blast_genes $output_dir/trans.blast.dat.gz  --out_prefix $output_dir/trans.blast.align_coords";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/trans.blast.dat.index.ok"));
     
     
     ####################################
@@ -365,6 +388,15 @@ main: {
     # copy over the AnnotFilterRule:
     $cmd = "cp $annot_filter_rule $output_dir/.";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/annotfiltrule_cp.ok"));
+    
+    if ($fusion_annot_lib) {
+        unless ($fusion_annot_lib =~ /\.gz$/) {
+            die "Error, fusion annot lib: $fusion_annot_lib doesn't appear to be gzipped";
+        }
+        $cmd = "cp $fusion_annot_lib $output_dir/fusion_annot_lib.gz";
+        $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/fusion_annot_lib.cp.ok"));
+        $fusion_annot_lib = "$output_dir/fusion_annot_lib.gz";
+    }
     
     $cmd = "$UTILDIR/build_fusion_annot_db_index.pl --gene_spans $output_dir/ref_annot.gtf.gene_spans --out_db_file $output_dir/fusion_annot_lib.idx";
     if ($fusion_annot_lib) {
@@ -390,7 +422,7 @@ main: {
     if ($pfam_db) {
 
         # extract the protein sequences:
-        my $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl $gtf_file $genome_fa_file prot > ref_annot.pep.fa"; 
+        my $cmd = "$UTILDIR/gtf_file_to_feature_seqs.pl --gtf_file $gtf_file --genome_fa $genome_fa_file --seqType prot > ref_annot.pep.fa"; 
         $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/make_pep_file.ok"));
 
         # run pfam
@@ -401,11 +433,20 @@ main: {
         $cmd= "gzip PFAM.domtblout.dat";
         $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/gzip_pfam.ok"));
 
-        # index the pfam hits:
-        $cmd = "$UTILDIR/index_pfam_domain_info.pl --pfam_domains PFAM.domtblout.dat.gz --genome_lib_dir $output_dir";
-        $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/index_pfam_hits.ok"));
+        $cmd = "cp PFAM.domtblout.dat.gz $output_dir/PFAM.domtblout.dat.gz";
+        $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/cp_pfam_dat.ok"));
 
+        # index the pfam hits:
+        $cmd = "$UTILDIR/index_pfam_domain_info.pl --pfam_domains $output_dir/PFAM.domtblout.dat.gz --genome_lib_dir $output_dir";
+        $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/index_pfam_hits.ok"));
+        
     }
+
+
+    ## perform final validation:
+    $cmd = "$UTILDIR/validate_ctat_genome_lib.pl $output_dir";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/validate_ctat_genome_lib.ok"));
+    
     
     $pipeliner->run();
 
@@ -436,4 +477,54 @@ sub check_for_required_tools {
         #die "Error, missing at least one required tool. See error messages and perform required software installations before running.";
     }
 
+}
+
+####
+sub prep_dfam_db {
+    my ($dfam_db_type) = @_;
+
+    my $pipeliner = new Pipeliner(-verbose => 2,
+                                  -checkpoint_dir => "_dfam_db_prep_chckpts");
+
+    my $db_base_url = "http://dfam.org/releases/Dfam_3.1/infrastructure/dfamscan";
+    
+    my %db_filenames = ( 'human' => "homo_sapiens_dfam.hmm",
+                         'mouse' => "mus_musculus_dfam.hmm" );
+
+    my $db_filename = $db_filenames{$dfam_db_type} or confess "Error, cannot find url for type: $dfam_db_type"; 
+    my $url = $db_base_url . "/" . $db_filename;
+    
+    ## pull down database and indexes.
+    foreach my $index_type ("", "h3f", "h3i", "h3m", "h3p") {
+        my $wget_url = "$url";
+        if ($index_type) {
+            $wget_url .= ".$index_type";
+        }
+        my $cmd = "wget $wget_url";
+        $pipeliner->add_commands(new Command($cmd, "dfam.$index_type.ok"));
+    }
+
+    $pipeliner->run();
+    
+    return($db_filename);
+}
+
+####
+sub prep_pfam_db {
+    
+    my $pipeliner = new Pipeliner(-verbose => 2,
+                                  -checkpoint_dir => "_pfam_db_prep_chckpts");
+    
+    my $url = "ftp://ftp.ebi.ac.uk/pub/databases/Pfam/current_release/Pfam-A.hmm.gz";
+    
+    $pipeliner->add_commands(new Command("wget $url", "pfam_wget.ok"));
+
+    $pipeliner->add_commands(new Command("gunzip Pfam-A.hmm.gz", "pfam_gunzip.ok"));
+
+    $pipeliner->add_commands(new Command("hmmpress Pfam-A.hmm", "pfam_hmmpress.ok"));
+    
+
+    $pipeliner->run();
+    
+    return("Pfam-A.hmm");
 }

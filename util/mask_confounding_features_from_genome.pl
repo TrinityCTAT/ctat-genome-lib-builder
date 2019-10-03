@@ -59,7 +59,9 @@ unless ($gencode_gtf && $genome_fa && $out_masked) {
 main: {
 
     ## get list of regions to mask out:
-    my %chr_to_mask_regions = &get_pseudogene_coordinates($gencode_gtf);
+    #my %chr_to_mask_regions = &get_pseudogene_coordinates($gencode_gtf);  # maybe not such a great idea after all. Must be more targeted - specific ones.
+    
+    my %chr_to_mask_regions;
     
     ## extract non-pseudogene cdna sequences
     my $tmpdir = "__paralogs";
