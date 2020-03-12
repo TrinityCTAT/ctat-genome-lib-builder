@@ -70,7 +70,11 @@ main: {
     chomp $num_blast_hits;
 
     unless ($num_blast_hits =~ /\d/ && $num_blast_hits > 0) {
-        die "Error, no blast hits from file: $blast_file";
+        print STDERR "\n\n*******************\n\tError, no blast hits from file: $blast_file --- better be running in test-mode here...";
+        
+        print STDERR "\n\n\y--  waiting 10 seconds for you to decide to kill the process or continue --  ";
+        sleep(10);
+        print STDERR "\n\n--  and on we go.\n\n";
     }
     
     my %seen_pairs;
