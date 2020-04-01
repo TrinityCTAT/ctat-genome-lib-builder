@@ -18,7 +18,7 @@ Creates IGH and IGL super-loci
 #
 # --gencode_gtf <str>     gencode GTF annotation file
 #
-# --out_gtf <str>         output masked genome file
+# --out_gtf <str>         revised GTF annotation file
 #
 #######################################################
 

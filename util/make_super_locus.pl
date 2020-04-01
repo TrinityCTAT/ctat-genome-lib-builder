@@ -48,8 +48,8 @@ foreach my $coordset (@collapsed_coords) {
     my ($lend, $rend) = @$coordset;
 
     
-    print join("\t", $CHR, "SuperLocus", "exon", $lend, $rend, ".", $ORIENT, ".",
-               "gene_id \"$gene_id\"; transcript_id \"$trans_id\"; gene_name \"$gene_name\";") . "\n";
+    #print join("\t", $CHR, "SuperLocus", "exon", $lend, $rend, ".", $ORIENT, ".",
+    #           "gene_id \"$gene_id\"; transcript_id \"$trans_id\"; gene_name \"$gene_name\";") . "\n";
 
 
     push (@allcoords, $lend, $rend);
