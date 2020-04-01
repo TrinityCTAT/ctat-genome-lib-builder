@@ -78,6 +78,10 @@ main: {
     $pipeliner->run();
     
     &append_mask_regions($paramask_file, \%chr_to_mask_regions);
+
+    ## incorporate the pseudoautosomal regions on chrY
+    &append_PAR_regions($gencode_gtf, \%chr_to_mask_regions);
+    
     
     ## do making:
     my $fasta_reader = new Fasta_reader($genome_fa);
@@ -175,3 +179,37 @@ sub append_mask_regions {
     return;
 }
 
+
+####
+sub append_PAR_regions {
+    my ($gencode_gtf, $chr_to_mask_regions_href) = @_;
+ 
+
+    my $found_PAR = 0;
+   
+    open(my $fh, $gencode_gtf) or die "Error, cannot open file: $gencode_gtf";
+    while(<$fh>) {
+        my $line = $_;
+        chomp;
+        
+        my @x = split(/\t/);
+        unless (scalar(@x) > 8) { next; }
+        
+        unless ($x[2] eq "gene") { next; }
+        
+        if ($x[8] =~ /tag \"PAR\"/) {
+            unless ($x[0] eq "chrY") {
+                die "Error! found PAR tag feature and not on chrY:  [$line]  ";
+            }
+            push (@{$chr_to_mask_regions_href->{$x[0]}}, [$x[3], $x[4]]);
+            $found_PAR = 1;
+        }
+    }
+    close $fh;
+
+    unless($found_PAR) {
+        die "Error, didn't locate PAR features in $gencode_gtf";
+    }
+    
+    return;
+}
