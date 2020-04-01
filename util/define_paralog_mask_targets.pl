@@ -10,7 +10,7 @@ use Pipeliner;
 use File::Basename;
 use Data::Dumper;
 
-my @MANUALLY_DEFINED_REFERENCE_GENES = qw( DUX4 );
+my @MANUALLY_DEFINED_REFERENCE_GENES = qw( DUX4 SEPT14 );
 
 my $CPU = 4;
 

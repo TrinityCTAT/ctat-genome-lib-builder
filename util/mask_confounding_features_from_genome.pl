@@ -59,7 +59,6 @@ unless ($gencode_gtf && $genome_fa && $out_masked) {
 main: {
 
     ## get list of regions to mask out:
-    #my %chr_to_mask_regions = &get_pseudogene_coordinates($gencode_gtf);  # maybe not such a great idea after all. Must be more targeted - specific ones.
     
     my %chr_to_mask_regions;
     
@@ -132,37 +131,6 @@ main: {
 
 
 
-
-####
-sub get_pseudogene_coordinates {
-    my ($gencode_gtf) = @_;
-    
-    my %chr_to_mask_regions;
-
-    open(my $fh, $gencode_gtf) or die "Error, cannot open file: $gencode_gtf";
-    while(<$fh>) {
-        my @x = split(/\t/);
-        if (scalar(@x) > 8 && $x[2] eq "exon") {
-            if ($x[8] =~ /gene_type \"([^\"]+)\"/) {
-                my $gene_type = $1;
-                
-                ## customization for DUX4 pseudogenes labeled as coding genes in hg19 gencode v19
-                my $gene_name;
-                if ($x[8] =~ /gene_name \"([^\"]+)\"/) {
-                    $gene_name = $1;
-                }
-                
-                ## masking out pseudogenes.
-                if ($gene_type =~ /pseudogene/) {
-                    my ($chr, $lend, $rend) = ($x[0], $x[3], $x[4]);
-                    push (@{$chr_to_mask_regions{$chr}}, [$lend, $rend]);
-                }
-            }
-        }
-    }
-    
-    return(%chr_to_mask_regions);
-}
 
 ####
 sub append_mask_regions {
