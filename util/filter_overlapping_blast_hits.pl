@@ -22,7 +22,7 @@ main: {
 
     open(my $fh, "gunzip -c $blast_pairs_gz | ") or die "Error reading $blast_pairs_gz";
     while(my $line = <$fh>) {
-        my ($geneA, $geneB, @rest) = split(/\t/, $line);
+        my ($geneA, $transA, $geneB, @rest) = split(/\t/, $line);
         
         my $gene_pair = join("--", sort ($geneA, $geneB));
         my $overlaps = $gene_pair_overlap_info{$gene_pair};

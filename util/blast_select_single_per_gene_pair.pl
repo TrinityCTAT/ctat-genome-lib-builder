@@ -9,16 +9,21 @@ use DelimParser;
 
 use List::Util qw(max);
 
-my $usage = "\n\tusage: $0 allvsall.outfmt6.wGeneSym\n\n";
+my $usage = "\n\tusage: $0 allvsall.outfmt6.wGeneSym.gz\n\n";
 
 
 my $blast_info = $ARGV[0] or die $usage;
+
+unless ($blast_info =~ /\.gz$/) {
+    die "Error, input file must be gzipped";
+}
+
 
 main: {
 
     my %gene_pair_to_match_info;
 
-    open(my $fh, $blast_info) or die "Error, cannot open file: $blast_info";
+    open(my $fh, "gunzip -c $blast_info | ") or die "Error, cannot open file: $blast_info";
     my $tab_reader = new DelimParser::Reader($fh, "\t");
     while(my $row = $tab_reader->get_row()) {
         

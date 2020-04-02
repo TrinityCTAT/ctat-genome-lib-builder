@@ -179,9 +179,10 @@ if ($missing_tool_flag) {
     die "missing at least one required tool";
 }
 
-main: {
 
-    
+
+
+main: {
 
     my $output_dir_checkpoints_dir = "$output_dir/__chkpts";
     unless (-d $output_dir_checkpoints_dir) {
@@ -316,6 +317,9 @@ main: {
     $cmd = "$UTILDIR/index_cdna_seqs.pl $output_dir/ref_annot.cdsplus.fa"; 
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/$ref_annot_cdsplus_fa.idx.ok"));
         
+
+    ## blasts for homology detection (seq-similar pair definitions)
+
     $cmd = "makeblastdb -in $ref_annot_cdsplus_fa -dbtype nucl";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.blidx.ok"));
 
@@ -325,10 +329,15 @@ main: {
     $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/blast_outfmt6_replace_trans_id_w_gene_symbol.pl $ref_annot_cdsplus_fa $ref_annot_cdsplus_fa.allvsall.outfmt6 | gzip > $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz\" ";
     $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz.ok"));
 
-    $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/filter_overlapping_blast_hits.pl $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz $output_dir/ref_annot.gtf.gene_spans | gzip > $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.overlaps_filt.gz\" ";
-    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.overlaps_filt.ok"));
+    
+    $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/blast_select_single_per_gene_pair.pl $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.gz | gzip > $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.best.gz\" ";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.best.gz.ok"));
 
-    $cmd = "cp $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.overlaps_filt.gz $output_dir/blast_pairs.dat.gz";
+
+    $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/filter_overlapping_blast_hits.pl $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.best.gz $output_dir/ref_annot.gtf.gene_spans | gzip > $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.best.overlaps_filt.gz\" ";
+    $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/$ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.best.overlaps_filt.ok"));
+
+    $cmd = "cp $ref_annot_cdsplus_fa.allvsall.outfmt6.genesym.best.overlaps_filt.gz $output_dir/blast_pairs.dat.gz";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/cp_gene_blast_pairs.ok"));
 
     # index the blast hits:
@@ -336,7 +345,7 @@ main: {
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/blast_pairs.idx.ok"));
     
     ##################################
-    # blast across full cDNA sequences
+    # blast across full cDNA sequences (for read filtering)
 
     # extract the cDNA sequences
     my $ref_annot_cdna_fa = "ref_annot.cdna.fa";
