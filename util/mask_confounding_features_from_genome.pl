@@ -140,6 +140,11 @@ sub append_mask_regions {
     while(<$fh>) {
         chomp;
         my ($chr, $lend, $rend) = split(/\t/);
+        
+        # include 50 kb upstream/downstream regions
+        $lend -= 50000;
+        $rend += 50000;
+        
         push (@{$chr_to_mask_regions_href->{$chr}}, [$lend, $rend]);
     }
     close $fh;
