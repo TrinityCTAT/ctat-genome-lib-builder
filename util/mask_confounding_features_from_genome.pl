@@ -93,6 +93,8 @@ main: {
         my $header = $seq_obj->get_header();
         my $sequence = $seq_obj->get_sequence();
 
+        my $seqlen = length($sequence);
+
         my $regions_aref = $chr_to_mask_regions{$chr};
         if (ref $regions_aref) {
             my @regions = @$regions_aref;
@@ -101,6 +103,11 @@ main: {
             my $counter = 0;
             foreach my $region (@regions) {
                 my ($lend, $rend) = sort {$a<=>$b} @$region;
+
+                # ensure in range:
+                if ($lend < 1) { $lend = 1; }
+                if ($rend > $seqlen) { $rend = $seqlen; }
+                
                 $counter++;
                 print STDERR "\t-[$counter] masking $chr $lend-$rend\n";
                 if ($rend - $lend > 1e6) {
@@ -141,10 +148,6 @@ sub append_mask_regions {
         chomp;
         my ($chr, $lend, $rend) = split(/\t/);
         
-        # include 50 kb upstream/downstream regions
-        $lend -= 50000;
-        $rend += 50000;
-        
         push (@{$chr_to_mask_regions_href->{$chr}}, [$lend, $rend]);
     }
     close $fh;
@@ -169,12 +172,25 @@ sub append_PAR_regions {
         unless (scalar(@x) > 8) { next; }
         
         unless ($x[2] eq "gene") { next; }
+
+        my $contig = $x[0];
         
         if ($x[8] =~ /tag \"PAR\"/) {
             unless ($x[0] eq "chrY") {
                 die "Error! found PAR tag feature and not on chrY:  [$line]  ";
             }
-            push (@{$chr_to_mask_regions_href->{$x[0]}}, [$x[3], $x[4]]);
+
+
+            my $lend = $x[3];
+            my $rend = $x[4];
+            
+            # include 50 kb upstream/downstream regions
+            $lend -= 50000;
+            $rend += 50000;
+            
+            if ($lend < 1) { $lend = 1; }
+            
+            push (@{$chr_to_mask_regions_href->{$contig}}, [$lend, $rend]);
             $found_PAR = 1;
         }
     }
