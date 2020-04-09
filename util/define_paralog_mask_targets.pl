@@ -10,7 +10,7 @@ use Pipeliner;
 use File::Basename;
 use Data::Dumper;
 
-my @MANUALLY_DEFINED_REFERENCE_GENES = qw( DUX4 SEPT14 );
+my @MANUALLY_DEFINED_REFERENCE_GENES = qw( DUX4 SEPT14 SEPTIN14); #renamed SEPTIN14 in gencode v33
 
 my $CPU = 4;
 

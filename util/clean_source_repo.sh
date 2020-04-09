@@ -18,7 +18,7 @@ set +e
 mv Pfam-A.* \
     homo_sapiens_dfam.* \
     *cmds \
-    ref_annot.cdsplus.dfam_masked.fa.n* \
+    ref_annot.cdsplus.dfam_masked.fa.n* ref_annot.cdsplus.dfam_masked.fa.allvsall.outfmt6.genesym.gz ref_annot.cdsplus.dfam_masked.fa.allvsall.outfmt6.genesym.best.gz \
     *outfmt6 ref_annot.cdna.fa.n* \
     *outfmt6.toGenes \
     *ok \
