@@ -35,7 +35,7 @@ my $usage = <<__EOUSAGE__;
 #  --gtf <string>                  transcript structure annotation
 #                                     Note: can restrict to coding genes and lncRNAs
 #  --dfam_db <string>              DNA transposable element database (Dfam.hmm), required for repeat masking. (** highly recommended **)
-#                                  (use organism-specific library if possible)
+#                                  (use organism-specific library if possible. Indicating 'human' or 'mouse' will automatically pull the resources from dfam directly for convenience.
 #
 #  Misc options:
 #
