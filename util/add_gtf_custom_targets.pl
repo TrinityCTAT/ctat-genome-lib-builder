@@ -90,12 +90,15 @@ main: {
 
         ## must include the Y chromosome allele
         print STDERR "-adding custom CRLF2 entry (Y-allele)\n";
-        $crlf2_struct = $chr_gene_to_span_n_orient{"chrY:CRLF2"} or confess "Error, cannot find gene struct for chrY:CRLF2 based on $in_gtf";
-        $custom_gtf = &get_custom_RNA_gtf($crlf2_struct, "chrY", "CRLF2", "-", 50000, 0);
-        print $ofh "$custom_gtf";
-        
-
-
+        $crlf2_struct = $chr_gene_to_span_n_orient{"chrY:CRLF2"};
+        if ($crlf2_struct) {
+            $custom_gtf = &get_custom_RNA_gtf($crlf2_struct, "chrY", "CRLF2", "-", 50000, 0);
+            print $ofh "$custom_gtf";
+        }
+        else {
+            print STDERR "WARNING, cannot find gene struct for chrY:CRLF2 based on $in_gtf\n";
+            
+        }
     }
     
     {
