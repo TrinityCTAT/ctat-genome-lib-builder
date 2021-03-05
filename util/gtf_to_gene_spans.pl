@@ -30,10 +30,12 @@ main: {
         $info =~ /gene_id \"([^\"]+)\"/ or die "Error, cannot extract gene_id from $info";
         
         my $gene_id = $1;
-
+        my $orig_gene_id = $gene_id;
+        
         my $gene_name = "$gene_id";
         if ($info =~ /gene_name \"([^\"]+)\"/) {
             $gene_name = $1;
+            $gene_id = "$gene_id^$gene_name";
         }
         
         my $gene_type = "";
@@ -49,6 +51,7 @@ main: {
         $data{$gene_id}->{orient} = $orient;
         $data{$gene_id}->{gene_name} = $gene_name if $gene_name;
         $data{$gene_id}->{gene_type} = $gene_type if $gene_type;
+        $data{$gene_id}->{gene_id} = $orig_gene_id;
     }
     close $fh;
 
@@ -62,10 +65,12 @@ main: {
 
         my $lend = shift @coords;
         my $rend = pop @coords;
+
+        my $gene_id = $data{$gene}->{gene_id};
         my $gene_name = $data{$gene}->{gene_name} || ".";
         my $gene_type = $data{$gene}->{gene_type} || ".";
         
-        print join("\t", $gene, $chr, $lend, $rend, $orient, $gene_name, $gene_type) . "\n";
+        print join("\t", $gene_id, $chr, $lend, $rend, $orient, $gene_name, $gene_type) . "\n";
     }
     
     exit(0);
