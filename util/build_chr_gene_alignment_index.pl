@@ -72,7 +72,7 @@ main: {
     unless ($num_blast_hits =~ /\d/ && $num_blast_hits > 0) {
         print STDERR "\n\n*******************\n\tError, no blast hits from file: $blast_file --- better be running in test-mode here...";
         
-        print STDERR "\n\n\y--  waiting 10 seconds for you to decide to kill the process or continue --  ";
+        print STDERR "\n\ny--  waiting 10 seconds for you to decide to kill the process or continue --  ";
         sleep(10);
         print STDERR "\n\n--  and on we go.\n\n";
     }
