@@ -37,10 +37,13 @@ sub index_GTF_gene_objs_from_GTF {
         
 
         if ($seen{$gene_id}) {
-            confess "Error, already processed gene: $gene_id\n"
+            print STDERR "Error, already processed gene: $gene_id\n"
                 . " here: " . $gene_obj->toString() . "\n"
                 . " and earlier: " . $seen{$gene_id}->toString();
+
+            print STDERR "**** keeping earlier version only.\n\n";
             
+            next;
         }
         
         $seen{$gene_id} = $gene_obj;
@@ -126,7 +129,7 @@ sub GTF_to_gene_objs {
         
 		# print "gene_id: $gene_id, transcrpt_id: $transcript_id, $type\n";
 
-        if ($type eq 'transcript' || $type eq 'gene') { next; } # capture by exon coordinates
+        if ($type eq 'transcript' || $type eq 'mRNA' || $type eq 'gene') { next; } # capture by exon coordinates
 
         my $transcript_id;
         if ($annot =~ /transcript_id \"([^\"]+)\"/) {
@@ -192,52 +195,61 @@ sub GTF_to_gene_objs {
                 my @gene_objs;
                 
                 foreach my $transcript_id (keys %$transcripts_href) {
+
+
+                    eval {
                     
-                    my $coord_types_href = $transcripts_href->{$transcript_id};
-                    
-                    my $CDS_coords_aref = $coord_types_href->{CDS};
-                    my $mRNA_coords_aref = $coord_types_href->{mRNA};
-                    
-                    
-                    #print STDERR "Before, CDS: " . Dumper($CDS_coords_aref);
-                    #print STDERR "Before, exons: " . Dumper($mRNA_coords_aref);
-                    
-                    
-                    my $CDS_coords_href = &_join_overlapping_coords($CDS_coords_aref);
-                    my $mRNA_coords_href = &_join_overlapping_coords($mRNA_coords_aref);
-                    
-                    #print STDERR "CDS: " . Dumper($CDS_coords_href);
-                    #print STDERR "mRNA: " . Dumper ($mRNA_coords_href);
-                    
-                    
-                    my $gene_obj = new Gene_obj();
-                    $gene_obj->populate_gene_object($CDS_coords_href, $mRNA_coords_href);
-                    
-                    $gene_obj->{TU_feat_name} = $gene_id;
-                    $gene_obj->{Model_feat_name} = $transcript_id;
-                    if (my $name = $gene_id_to_name{$gene_id}) {
-                        $gene_obj->{com_name} = $name;
+                        my $coord_types_href = $transcripts_href->{$transcript_id};
+                        
+                        my $CDS_coords_aref = $coord_types_href->{CDS};
+                        my $mRNA_coords_aref = $coord_types_href->{mRNA};
+                        
+                        
+                        #print STDERR "Before, CDS: " . Dumper($CDS_coords_aref);
+                        #print STDERR "Before, exons: " . Dumper($mRNA_coords_aref);
+                        
+                        
+                        my $CDS_coords_href = &_join_overlapping_coords($CDS_coords_aref);
+                        my $mRNA_coords_href = &_join_overlapping_coords($mRNA_coords_aref);
+                        
+                        #print STDERR "CDS: " . Dumper($CDS_coords_href);
+                        #print STDERR "mRNA: " . Dumper ($mRNA_coords_href);
+                        
+                        
+                        my $gene_obj = new Gene_obj();
+                        $gene_obj->populate_gene_object($CDS_coords_href, $mRNA_coords_href);
+                        
+                        $gene_obj->{TU_feat_name} = $gene_id;
+                        $gene_obj->{Model_feat_name} = $transcript_id;
+                        if (my $name = $gene_id_to_name{$gene_id}) {
+                            $gene_obj->{com_name} = $name;
+                        }
+                        else {
+                            $gene_obj->{com_name} = $transcript_id;
+                        }
+                        if (my $gene_name = $gene_id_to_gene_name{$gene_id}) {
+                            $gene_obj->{gene_name} = $gene_name;
+                        }
+                        $gene_obj->{asmbl_id} = $seqname;
+                        $gene_obj->{source} = $source;
+                        
+                        if (my $gene_type = $gene_id_to_gene_type{$gene_id}) {
+                            $gene_obj->{gene_type} = $gene_type;
+                        }
+                        if (my $transcript_type = $transcript_id_to_transcript_type{$transcript_id}) {
+                            $gene_obj->{transcript_type} = $transcript_type;
+                        }
+                        
+                        $gene_obj->join_adjacent_exons();
+                        
+                        push (@gene_objs, $gene_obj);
+                    };
+                
+                    if ($@) {
+                        print STDERR "Error encountered for gene($gene_id) transcript($transcript_id): $@";
+                        print STDERR "- ******  skipping $transcript_id ******\n";
                     }
-                    else {
-                        $gene_obj->{com_name} = $transcript_id;
-                    }
-                    if (my $gene_name = $gene_id_to_gene_name{$gene_id}) {
-                        $gene_obj->{gene_name} = $gene_name;
-                    }
-                    $gene_obj->{asmbl_id} = $seqname;
-                    $gene_obj->{source} = $source;
-                    
-                    if (my $gene_type = $gene_id_to_gene_type{$gene_id}) {
-                        $gene_obj->{gene_type} = $gene_type;
-                    }
-                    if (my $transcript_type = $transcript_id_to_transcript_type{$transcript_id}) {
-                        $gene_obj->{transcript_type} = $transcript_type;
-                    }
-                    
-                    $gene_obj->join_adjacent_exons();
-                    
-                    push (@gene_objs, $gene_obj);
-                }
+                } # done foreach transcript isoform
                 
                 
                 ## want single gene that includes all alt splice variants here
@@ -272,7 +284,7 @@ sub GTF_to_gene_objs {
                     foreach my $gene_id (keys %$gene_ids_href) {
 
                         if (exists $coding_genes{$gene_id}) {
-                            print STDERR "Warning: Skipping $gene_id ($nc_type) as this gene is already included as a coding gene.\n";
+                            print STDERR "Warning: Skipping $gene_id ($nc_type) as this gene is already included as a regular 'gene' type.\n";
                             next;
                         }
 
