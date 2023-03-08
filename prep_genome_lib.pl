@@ -272,6 +272,7 @@ main: {
         $cmd = "STAR --runThreadN $CPU --runMode genomeGenerate --genomeDir $star_index $maybe_tmpdir "
             . " --genomeFastaFiles $genome_fa_for_STAR_index " ## using the pseudogene and paralog-masked genome here.
             . " --limitGenomeGenerateRAM 40419136213 "
+            . " --limitSjdbInsertNsj 10000000 "
             . " --genomeChrBinNbits 16 " # needed for >4k contigs w/ FI
             . " --sjdbGTFfile $gtf_file "
             . " --sjdbOverhang $max_readlength ";
