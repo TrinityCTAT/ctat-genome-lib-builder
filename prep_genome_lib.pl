@@ -53,10 +53,6 @@ my $usage = <<__EOUSAGE__;
 #
 #  --CPU <int>                     number of threads (defalt: $CPU)
 #
-#  --gmap_build                    include gmap_build (for use w/ DISCASM/GMAP-fusion)
-#                                  equivalent to running the following in the ctat_genome_lib_build_dir:
-#                                        gmap_build -D . -d ref_genome.fa.gmap -k 13 ./ref_genome.fa
-#
 #  --outTmpDir	<string>	   passed to STAR (very useful if local disks are faster than network disks)
 #
 #  --human_gencode_filter      customized prep operations for human/gencode genome and annotation data.
@@ -100,9 +96,6 @@ my $HUMAN_GENCODE_FILTER = 0;
 
               'human_gencode_filter' => \$HUMAN_GENCODE_FILTER,
               
-              # for discasm
-              'gmap_build' => \$gmap_build_flag,
-    
               'fusion_annot_lib=s' => \$fusion_annot_lib,
    
               'pfam_db=s' => \$pfam_db,
@@ -130,7 +123,7 @@ if (@ARGV) {
 }
         
 
-my @required_tools = ("STAR", "makeblastdb", "blastn");
+my @required_tools = ("STAR", "makeblastdb", "blastn", "minimap2");
 
 
 # for dfam
@@ -142,10 +135,6 @@ if ($pfam_db) {
 
 if ($STAR_ONLY_FLAG) {
     @required_tools = ("STAR");
-}
-
-if ($gmap_build_flag) {
-    push (@required_tools, "gmap_build");
 }
 
 &check_for_required_tools(@required_tools);
@@ -160,23 +149,6 @@ my $UTILDIR = $FindBin::Bin . "/util";
 
 unless ($output_dir) {
     $output_dir = cwd();
-}
-
-my @tools_required = qw(STAR);
-if ($gmap_build_flag) {
-    push (@tools_required, 'gmap_build');
-}
-
-my $missing_tool_flag = 0;
-foreach my $tool (@tools_required) {
-    my $path = `which $tool`;
-    unless ($path =~ /\w/) {
-        print STDERR "Error, cannot locate required tool: $tool\n";
-        $missing_tool_flag = 1;
-    }
-}
-if ($missing_tool_flag) {
-    die "missing at least one required tool";
 }
 
 
@@ -257,8 +229,22 @@ main: {
     # extract exon records    
     $cmd = "bash -c \" set -euxo pipefail; $UTILDIR/gtf_to_exon_gene_records.pl $output_dir/ref_annot.gtf  | sort -k 1,1 -k4,4g -k5,5g | uniq  > $output_dir/ref_annot.gtf.mini.sortu \" ";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_annot.gtf.mini.sortu.ok"));
-            
+    
+
+    ##
+    # build minimap2 index
+    ## 
+    
+    $cmd = "minimap2 -d $output_dir/ref_genome.fa.mm2 $output_dir/ref_genome.fa";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/mm2_genome_idx.ok"));
+
+    $cmd = "paftools.ctat.js gff2bed $output_dir/ref_annot.gtf > $output_dir/ref_annot.gtf.mm2.splice.bed";
+    $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/mm2.splice_bed.ok"));
+    
+
+    ##
     # build star index
+    ##
 
     unless ($SKIP_STAR_FLAG) {
     
@@ -273,7 +259,7 @@ main: {
             . " --genomeFastaFiles $genome_fa_for_STAR_index " ## using the pseudogene and paralog-masked genome here.
             . " --limitGenomeGenerateRAM 40419136213 "
             . " --limitSjdbInsertNsj 10000000 "
-            . " --genomeChrBinNbits 16 " # needed for >4k contigs w/ FI
+            #. " --genomeChrBinNbits 16 " # needed for >4k contigs w/ FI, default is 18 now, so commenting it out, Oct 2023 bhaas.
             . " --sjdbGTFfile $gtf_file "
             . " --sjdbOverhang $max_readlength ";
         
@@ -419,16 +405,7 @@ main: {
     ## Sections below are optional depending on optional params
     ############################################################
     
-    if ($gmap_build_flag) {
-        
-        #########################
-        # build GMAP genome index
-        
-        $cmd = "gmap_build -D $output_dir -d ref_genome.fa.gmap -k 13 $output_dir/ref_genome.fa";
-        $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_genome.fa.gmap.ok"));
-    }
-
-
+    
     if ($pfam_db) {
 
         # extract the protein sequences:
@@ -483,8 +460,7 @@ sub check_for_required_tools {
 
     if ($missing_flag) {
         
-        ## if building from a provided source lib, then we don't need to die on missing tools
-        #die "Error, missing at least one required tool. See error messages and perform required software installations before running.";
+        die "Error, missing at least one required tool. See error messages and perform required software installations before running.";
     }
 
 }
