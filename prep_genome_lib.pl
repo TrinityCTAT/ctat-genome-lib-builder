@@ -238,7 +238,7 @@ main: {
     $cmd = "minimap2 -d $output_dir/ref_genome.fa.mm2 $output_dir/ref_genome.fa";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/mm2_genome_idx.ok"));
 
-    $cmd = "paftools.ctat.js gff2bed $output_dir/ref_annot.gtf > $output_dir/ref_annot.gtf.mm2.splice.bed";
+    $cmd = "$UTILDIR/paftools.ctat.js gff2bed $output_dir/ref_annot.gtf > $output_dir/ref_annot.gtf.mm2.splice.bed";
     $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/mm2.splice_bed.ok"));
     
 
