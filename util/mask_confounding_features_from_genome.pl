@@ -112,7 +112,7 @@ main: {
                 
                 $counter++;
                 print STDERR "\t-[$counter] masking $chr $lend-$rend\n";
-                if ($rend - $lend > 1e6) {
+                if ($rend - $lend > 1e6 && $chr ne "chrY") {
                     die "Error, this pseudogene looks too long!";
                 }
                 
