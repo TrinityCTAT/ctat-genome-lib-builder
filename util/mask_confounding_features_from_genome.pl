@@ -56,6 +56,8 @@ unless ($gencode_gtf && $genome_fa && $out_masked) {
 }
 
 
+my $IS_GRCH38 = ($genome_fa =~ /GRCh38/) ? 1 : 0;
+
 main: {
 
     ## get list of regions to mask out:
@@ -197,7 +199,20 @@ sub append_PAR_regions {
     close $fh;
 
     unless($found_PAR) {
-        die "Error, didn't locate PAR features in $gencode_gtf";
+        if ($IS_GRCH38) {
+            # just add manually. 
+            # see: https://useast.ensembl.org/info/genome/genebuild/human_PARS.html
+
+            # chromosome:GRCh38:Y:10001 - 2781479 is shared with X: 10001 - 2781479 (PAR1)
+            push (@{$chr_to_mask_regions_href->{"chrY"}}, [10001, 2781479]);
+            
+            # chromosome:GRCh38:Y:56887903 - 57217415 is shared with X: 155701383 - 156030895 (PAR2)
+            push (@{$chr_to_mask_regions_href->{"chrY"}}, [56887903, 57217415]);
+            
+        }
+        else {
+            die "Error, didn't locate PAR features in $gencode_gtf";
+        }
     }
     
     return;
