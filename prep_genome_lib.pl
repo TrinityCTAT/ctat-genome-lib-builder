@@ -198,6 +198,9 @@ main: {
     
     my $genome_fa_for_STAR_index = $genome_fa_file;
 
+
+    my $is_grch38 = ($genome_fa_file =~ /GRCh38/i) ? 1 : 0;
+    
     if ($HUMAN_GENCODE_FILTER) {
         
         my $new_gtf_file = "$gtf_file.revised.gtf";
@@ -212,7 +215,7 @@ main: {
         $gtf_file = $customized_gtf;
         
         my $masked_genome_fa_file = "$genome_fa_file.pseudo_masked.fa";
-        $cmd = "$UTILDIR/mask_confounding_features_from_genome.pl --gencode_gtf $gtf_file --genome_fa $genome_fa_file_for_blast --out_masked $masked_genome_fa_file";
+        $cmd = "$UTILDIR/mask_confounding_features_from_genome.pl --gencode_gtf $gtf_file --genome_fa $genome_fa_file_for_blast --out_masked $masked_genome_fa_file --is_grch38 $is_grch38 ";
         $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/pseudo_mask_genome.ok"));
         
         $genome_fa_for_STAR_index = $masked_genome_fa_file;

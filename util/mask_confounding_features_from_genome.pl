@@ -21,6 +21,7 @@ All pseudogene regions get masked from the genome.
 #
 # --out_masked <str>      output masked genome file
 #
+# --is_grch38             Is GRCh38
 #
 #######################################################
 
@@ -35,6 +36,7 @@ my $help_flag;
 my $gencode_gtf;
 my $genome_fa;
 my $out_masked;
+my $is_grch38 = 0;
 
 my $UTILDIR = "$FindBin::Bin";
 
@@ -43,7 +45,7 @@ my $UTILDIR = "$FindBin::Bin";
               'gencode_gtf=s' => \$gencode_gtf,
               'genome_fa=s' => \$genome_fa,
               'out_masked=s' => \$out_masked,
-              
+              'is_grch38=s' => \$is_grch38,
 
     );
 
@@ -56,7 +58,7 @@ unless ($gencode_gtf && $genome_fa && $out_masked) {
 }
 
 
-my $IS_GRCH38 = ($genome_fa =~ /GRCh38/) ? 1 : 0;
+my $IS_GRCH38 = ($genome_fa =~ /GRCh38/ || $is_grch38  ) ? 1 : 0;
 
 main: {
 
