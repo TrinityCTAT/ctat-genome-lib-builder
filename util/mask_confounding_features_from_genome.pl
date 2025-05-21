@@ -58,7 +58,7 @@ unless ($gencode_gtf && $genome_fa && $out_masked) {
 }
 
 
-my $IS_GRCH38 = ($genome_fa =~ /GRCh38/ || $is_grch38  ) ? 1 : 0;
+my $IS_GRCH38 = 1;
 
 main: {
 
