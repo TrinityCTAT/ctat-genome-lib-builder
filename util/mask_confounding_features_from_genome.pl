@@ -45,7 +45,7 @@ my $UTILDIR = "$FindBin::Bin";
               'gencode_gtf=s' => \$gencode_gtf,
               'genome_fa=s' => \$genome_fa,
               'out_masked=s' => \$out_masked,
-              'is_grch38=s' => \$is_grch38,
+              'is_grch38!' => \$is_grch38,
 
     );
 
