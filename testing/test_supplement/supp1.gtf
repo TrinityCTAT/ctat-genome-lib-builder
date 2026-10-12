@@ -1,0 +1,15 @@
+chr1	StringTie	transcript	1152311	1170200	1000	-	.	gene_id "STRG.1"; transcript_id "STRG.1.1"; ref_gene_id "ENSG00000078808.12";
+chr1	StringTie	exon	1152311	1153184	1000	-	.	gene_id "STRG.1"; transcript_id "STRG.1.1"; exon_number "1"; ref_gene_id "ENSG00000078808.12";
+chr1	StringTie	exon	1153838	1154013	1000	-	.	gene_id "STRG.1"; transcript_id "STRG.1.1"; exon_number "2"; ref_gene_id "ENSG00000078808.12";
+chr1	StringTie	exon	1154149	1154307	1000	-	.	gene_id "STRG.1"; transcript_id "STRG.1.1"; exon_number "3"; ref_gene_id "ENSG00000078808.12";
+chr1	StringTie	exon	1159212	1159348	1000	-	.	gene_id "STRG.1"; transcript_id "STRG.1.1"; exon_number "4"; ref_gene_id "ENSG00000078808.12";
+chr1	StringTie	exon	1163848	1164326	1000	-	.	gene_id "STRG.1"; transcript_id "STRG.1.1"; exon_number "5"; ref_gene_id "ENSG00000078808.12";
+chr1	StringTie	exon	1170000	1170200	1000	-	.	gene_id "STRG.1"; transcript_id "STRG.1.1"; exon_number "6"; ref_gene_id "ENSG00000078808.12";
+chr1	IsoQuant	exon	1152311	1153184	.	-	.	gene_id "XLOC_1"; transcript_id "XLOC_1.t1"; gene_name "SDF4";
+chr1	IsoQuant	exon	1158624	1158737	.	-	.	gene_id "XLOC_1"; transcript_id "XLOC_1.t1"; gene_name "SDF4";
+chr1	IsoQuant	exon	1163848	1164356	.	-	.	gene_id "XLOC_1"; transcript_id "XLOC_1.t1"; gene_name "SDF4";
+chr1	StringTie	exon	1152400	1153184	1000	-	.	gene_id "STRG.9"; transcript_id "STRG.9.1";
+chr1	StringTie	exon	1167272	1167380	1000	-	.	gene_id "STRG.9"; transcript_id "STRG.9.1";
+chr1	StringTie	exon	2800000	2800500	1000	+	.	gene_id "NOVEL1"; transcript_id "NOVEL1.t1";
+chr1	StringTie	exon	2801000	2801400	1000	+	.	gene_id "NOVEL1"; transcript_id "NOVEL1.t1";
+chr1	StringTie	exon	2900000	2900300	1000	.	.	gene_id "STRG.20"; transcript_id "STRG.20.1";

@@ -1,0 +1,2 @@
+chr1	StringTie	exon	2800100	2800500	1000	+	.	gene_id "STRG.50"; transcript_id "STRG.50.1";
+chr1	StringTie	exon	2801200	2801400	1000	+	.	gene_id "STRG.50"; transcript_id "STRG.50.1";
