@@ -60,6 +60,7 @@ check "dry run leaves lib unchanged" "diff -r $OUT/pristine $WORK > /dev/null"
 
 
 echo "## supplement 1 (isoforms of an existing gene, a novel gene)"
+orig_gtf_inode=$(stat -c %i $WORK/ref_annot.gtf)
 run $UTILDIR/supplement_ctat_genome_lib.pl --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes
 check "supplement succeeds" "[ $? -eq 0 ]"
 check "transcripts assigned by ref_gene_id, gene_name, exon overlap" \
@@ -72,6 +73,8 @@ for f in ref_annot.gtf ref_annot.gtf.mini.sortu ref_annot.gtf.mm2.splice.bed; do
     n=$(wc -l < $OUT/pristine/$f)
     check "original records intact at start of $f" "head -n $n $WORK/$f | cmp -s - $OUT/pristine/$f"
 done
+check "backup is a hard link to the original (no copy)" "[ \$(stat -c %i $WORK/ref_annot.gtf.bkup) -eq $orig_gtf_inode ]"
+check "user warned that backups are hard links" "grep -q 'WARNING: the new .bkup files were made as HARD LINKS' $OUT/last.log"
 check "mini.sortu gains only exons not already in the reference" \
     "[ \$(( \$(wc -l < $WORK/ref_annot.gtf.mini.sortu) - \$(wc -l < $OUT/pristine/ref_annot.gtf.mini.sortu) )) -eq 6 ]"
 check "SDF4 gene span extended" "grep -qP '^ENSG00000078808.12\tchr1\t1152288\t1170200\t-\tSDF4' $WORK/ref_annot.gtf.gene_spans"
@@ -135,6 +138,37 @@ run $UTILDIR/revert_ctat_genome_lib_supplement.pl --genome_lib_dir $WORK
 check "revert refused (exit 1)" "[ $? -eq 1 ] && grep -q 'differs from the one recorded' $OUT/last.log"
 check "no files changed by refused revert" "snapshot $WORK | cmp -s - $OUT/before_bad_revert.md5"
 rm -rf $WORK
+
+
+echo "## linked copy (source lib left unchanged)"
+SRC=$OUT/src
+COPY=$OUT/linked
+cp -a $OUT/pristine $SRC
+snapshot $SRC > $OUT/src.md5
+run $UTILDIR/supplement_ctat_genome_lib.pl --genome_lib_dir $SRC --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes --linked_copy $COPY
+check "linked copy supplement succeeds" "[ $? -eq 0 ]"
+check "user warned before and after that the copy uses hard links" \
+    "grep -q 'using HARD LINKS' $OUT/last.log && grep -q 'are HARD LINKS to the files in' $OUT/last.log"
+check "source lib unchanged" "snapshot $SRC | cmp -s - $OUT/src.md5 && [ ! -e $SRC/supplemental ]"
+check "unmodified files are hard links to the source" \
+    "[ \$(stat -c %i $COPY/ref_genome.fa) -eq \$(stat -c %i $SRC/ref_genome.fa) ] && [ \$(stat -c %i $COPY/ref_annot.prot_info.dbm) -eq \$(stat -c %i $SRC/ref_annot.prot_info.dbm) ]"
+check "no symlinks created" "[ \$(find $COPY -type l | wc -l) -eq \$(find $SRC -type l | wc -l) ]"
+check "modified files are new; .bkup links the source original" \
+    "[ \$(stat -c %i $COPY/ref_annot.gtf) -ne \$(stat -c %i $SRC/ref_annot.gtf) ] && [ \$(stat -c %i $COPY/ref_annot.gtf.bkup) -eq \$(stat -c %i $SRC/ref_annot.gtf) ]"
+check "copy's ref_annot.gtf == source + supplement" "cat $SRC/ref_annot.gtf $COPY/supplemental/supp_001.supp1.gtf | cmp -s - $COPY/ref_annot.gtf"
+check "manifest records source lib" "grep -q '\"source_lib\" : \"$SRC\"' $COPY/supplemental/manifest.json"
+check "validator reports linked copy" "perl $UTILDIR/validate_ctat_genome_lib.pl $COPY 2>&1 | grep -q 'linked copy of \\[$SRC\\]'"
+run $UTILDIR/supplement_ctat_genome_lib.pl --genome_lib_dir $COPY --supp_gtf $OUT/supp2_cds.gtf
+check "second supplement to the copy succeeds; source unchanged" "[ $? -eq 0 ] && snapshot $SRC | cmp -s - $OUT/src.md5"
+run $UTILDIR/revert_ctat_genome_lib_supplement.pl --genome_lib_dir $COPY
+check "reverted copy identical to source" "[ $? -eq 0 ] && diff -r $SRC $COPY > /dev/null"
+run $UTILDIR/supplement_ctat_genome_lib.pl --genome_lib_dir $SRC --supp_gtf $TESTDIR/supp1.gtf --linked_copy $COPY
+check "non-empty target rejected; source and target untouched" \
+    "[ $? -eq 1 ] && grep -q 'not empty' $OUT/last.log && snapshot $SRC | cmp -s - $OUT/src.md5 && diff -r $SRC $COPY > /dev/null"
+rm -rf $COPY
+run $UTILDIR/supplement_ctat_genome_lib.pl --genome_lib_dir $SRC --supp_gtf $TESTDIR/supp1.gtf --linked_copy $COPY
+check "failed supplement removes the linked copy" "[ $? -eq 1 ] && [ ! -e $COPY ] && snapshot $SRC | cmp -s - $OUT/src.md5"
+rm -rf $SRC
 
 
 echo "## original file lacking a final newline"

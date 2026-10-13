@@ -23,7 +23,8 @@ my $usage = <<__EOUSAGE__;
 #  Supplements an existing CTAT genome lib with additional transcript isoforms (eg. isoforms
 #  missing from the reference annotation), modifying the lib in place.
 #
-#  Before any lib file is modified for the first time, the original is preserved as <file>.bkup.
+#  Before any lib file is modified for the first time, the original is preserved as <file>.bkup
+#  (a hard link to the original where possible, so the backup takes no extra disk space).
 #  Each run regenerates the modified files from the .bkup originals plus ALL supplements added
 #  so far (stored under <genome_lib_dir>/supplemental/), so reruns do not stack.
 #
@@ -46,6 +47,15 @@ my $usage = <<__EOUSAGE__;
 #                                 (default: report them and stop)
 #
 #   --novel_gene_type <string>    gene_type given to novel genes (default: novel_gene)
+#
+#   --linked_copy <string>        leave --genome_lib_dir untouched: create a new lib at this path whose
+#                                 files are hard links to the originals (no extra disk space), and
+#                                 supplement that instead. Use for shared or read-only libs, or when
+#                                 jobs are running against the lib. The copy is self-contained and can
+#                                 be mounted on its own in docker/singularity. It must be on the same
+#                                 filesystem as --genome_lib_dir, and you must own the lib files (or
+#                                 have write access to them), otherwise symlinks are used instead and
+#                                 the copy only works where the original lib is visible at its path.
 #
 #   --dry_run                     validate and normalize the supplement, report, and change nothing
 #
@@ -77,6 +87,7 @@ my $assign_by_overlap_flag = 0;
 my $allow_novel_genes_flag = 0;
 my $novel_gene_type = "novel_gene";
 my $dry_run_flag = 0;
+my $linked_copy;
 
 &GetOptions ( 'h' => \$help_flag,
               'genome_lib_dir=s' => \$genome_lib_dir,
@@ -86,6 +97,7 @@ my $dry_run_flag = 0;
               'allow_novel_genes' => \$allow_novel_genes_flag,
               'novel_gene_type=s' => \$novel_gene_type,
               'dry_run' => \$dry_run_flag,
+              'linked_copy=s' => \$linked_copy,
     );
 
 if ($help_flag) {
@@ -102,6 +114,27 @@ if (@ARGV) {
 
 $genome_lib_dir = &ensure_full_path($genome_lib_dir);
 $supp_gtf = &ensure_full_path($supp_gtf);
+
+my $HARDLINK_RULES = <<__EORULES__;
+  Hard-linked files share storage: they are the same file under two names. So:
+    - do NOT edit lib files in place (eg. in a text editor, or with tools that rewrite a file
+      rather than replacing it): the change would appear under both names.
+    - supplement_ctat_genome_lib.pl and revert_ctat_genome_lib_supplement.pl never edit files
+      in place, so supplementing or reverting either lib is safe.
+    - deleting a file, or a whole lib directory, does not affect the other name/lib.
+__EORULES__
+
+my $num_copy_hardlinks = 0;
+my $num_copy_symlinks = 0;
+
+my $source_lib_dir;
+my $created_copy_dir; # set only once this run has created the linked copy; removed on failure
+if ($linked_copy && ! $dry_run_flag) {
+    my $copy_dir = &create_linked_copy($genome_lib_dir, &ensure_full_path($linked_copy));
+    $created_copy_dir = $copy_dir;
+    $source_lib_dir = $genome_lib_dir;
+    $genome_lib_dir = $copy_dir;
+}
 
 unless ($label) {
     $label = basename($supp_gtf);
@@ -131,6 +164,8 @@ my @PROT_INFO_MANAGED = ("ref_annot.prot_info.dbm",
 
 my $have_lock = 0;
 my $WORKDIR;
+my $num_hardlinked_backups = 0;
+
 
 main: {
 
@@ -149,12 +184,16 @@ main: {
     unless ($dry_run_flag) {
         unless (-w $genome_lib_dir) {
             die "Error, genome lib dir is not writable: $genome_lib_dir\n"
-                . "  (for a read-only install, copy the lib and supplement the copy)\n";
+                . "  (for a read-only install, use --linked_copy to supplement a copy)\n";
         }
         &acquire_lock();
     }
 
     my $manifest = &read_manifest();
+    if ($source_lib_dir) {
+        $manifest->{source_lib} = $source_lib_dir;
+        $manifest->{source_lib_links} = { hard_links => $num_copy_hardlinks, symlinks => $num_copy_symlinks };
+    }
 
     &check_backup_state($manifest);
 
@@ -304,11 +343,24 @@ main: {
         my $lib_file = "$genome_lib_dir/$file";
         my $bkup = "$lib_file.bkup";
         unless (-e $bkup) {
-            print STDERR "\t-backing up original $file -> $file.bkup\n";
-            ## copy-on-write where the filesystem supports it, otherwise a regular copy
-            my $ret = system("cp -p --reflink=auto $lib_file $bkup.tmp.$$ 2>/dev/null");
-            if ($ret) {
-                &process_cmd("cp -p $lib_file $bkup.tmp.$$");
+            ## A hard link is safe here because lib files are never written in place: each is
+            ## replaced by renaming a separately built file over it, leaving .bkup the only link
+            ## to the original. Otherwise copy-on-write where supported, or a regular copy.
+            if (-l $lib_file) {
+                ## a symlinked file in a linked copy: the backup points at the same original
+                symlink(readlink($lib_file), "$bkup.tmp.$$") or die "Error, cannot create symlink $bkup.tmp.$$: $!";
+                print STDERR "\t-backing up original $file -> $file.bkup (SYMLINK to the original)\n";
+            }
+            elsif (link($lib_file, "$bkup.tmp.$$")) {
+                print STDERR "\t-backing up original $file -> $file.bkup (HARD LINK to the original; no extra disk space)\n";
+                $num_hardlinked_backups++;
+            }
+            else {
+                print STDERR "\t-backing up original $file -> $file.bkup (copy)\n";
+                my $ret = system("cp -p --reflink=auto $lib_file $bkup.tmp.$$ 2>/dev/null");
+                if ($ret) {
+                    &process_cmd("cp -p $lib_file $bkup.tmp.$$");
+                }
             }
             rename("$bkup.tmp.$$", $bkup) or die "Error, cannot rename $bkup.tmp.$$ to $bkup";
             $manifest->{backups}->{$file} = &md5_file($bkup);
@@ -322,6 +374,15 @@ main: {
 
     copy($supp_gtf, "$SUPP_DIR/$supp_id.$label.input.gtf") or die "Error, cannot copy $supp_gtf to $SUPP_DIR: $!";
     rename($normalized_gtf, "$SUPP_DIR/$supp_id.$label.gtf") or die "Error, cannot move $normalized_gtf to $SUPP_DIR";
+
+    ## guard: a replacement must be a new file, never the original (or a link to it)
+    foreach my $file (@managed) {
+        my $tmp_inode = (stat($tmp_outputs{$file}))[1];
+        my $orig_inode = (stat("$genome_lib_dir/$file.bkup"))[1];
+        if ($tmp_inode == $orig_inode) {
+            die "Error, replacement for $file shares storage with the original; refusing to commit";
+        }
+    }
 
     foreach my $file (@managed) {
         rename($tmp_outputs{$file}, "$genome_lib_dir/$file") or die "Error, cannot rename $tmp_outputs{$file} to $genome_lib_dir/$file";
@@ -349,14 +410,39 @@ main: {
     print STDERR "\n-done. Genome lib supplemented with '$label' ($supp_id).\n"
         . "  Modified files (originals preserved as .bkup): " . join(", ", @managed) . "\n"
         . "  Supplements are recorded in $MANIFEST\n"
+        . ($source_lib_dir ? "  Linked copy of $source_lib_dir (unchanged)\n" : "")
         . "  To revert:  $UTILDIR/revert_ctat_genome_lib_supplement.pl --genome_lib_dir $genome_lib_dir\n\n";
+
+    if ($source_lib_dir) {
+        if ($num_copy_hardlinks) {
+            print STDERR "-WARNING: unmodified files in $genome_lib_dir are HARD LINKS to the files in\n"
+                . "  $source_lib_dir" . ($num_copy_symlinks ? " (except $num_copy_symlinks, which are symlinks)" : "") . "\n"
+                . $HARDLINK_RULES . "\n";
+        }
+        if ($num_copy_symlinks) {
+            print STDERR "-WARNING: $num_copy_symlinks files in $genome_lib_dir are SYMLINKS to files in\n"
+                . "  $source_lib_dir: the copy only works where that path is visible\n"
+                . "  (eg. in a container, only if it is also mounted at that same path).\n\n";
+        }
+    }
+    elsif ($num_hardlinked_backups) {
+        print STDERR "-WARNING: the new .bkup files were made as HARD LINKS to the original lib files (no extra\n"
+            . "  disk space), so each .bkup is now the original file itself, and also shares storage with\n"
+            . "  any linked copies made from this lib. Do not edit or replace .bkup files: revert restores them.\n\n";
+    }
 
     exit(0);
 }
 
 
 END {
-    if ($WORKDIR && -d $WORKDIR && $? != 0) {
+    if ($created_copy_dir && $? != 0 && -d $created_copy_dir) {
+        ## don't leave behind an unsupplemented (or partly supplemented) linked copy
+        print STDERR "-removing incomplete linked copy $created_copy_dir\n";
+        rmtree($created_copy_dir);
+        $have_lock = 0;
+    }
+    elsif ($WORKDIR && -d $WORKDIR && $? != 0) {
         print STDERR "-work files retained for inspection: $WORKDIR\n";
     }
     if ($have_lock) {
@@ -372,6 +458,113 @@ END {
     if ($? != 0) {
         $? = 1;
     }
+}
+
+
+####
+sub create_linked_copy {
+    my ($source_dir, $copy_dir) = @_;
+
+    $source_dir =~ s{/+$}{};
+    $copy_dir =~ s{/+$}{};
+
+    ## a new lib whose files are hard links to those of the source lib; supplementing it
+    ## replaces only its own links, leaving the source lib unchanged.
+
+    unless (-d $source_dir) {
+        die "Error, cannot locate genome lib dir: $source_dir";
+    }
+    if (-e $copy_dir) {
+        opendir(my $dh, $copy_dir) or die "Error, $copy_dir exists and is not a directory\n";
+        my @entries = grep { !/^\.\.?$/ } readdir($dh);
+        closedir($dh);
+        if (@entries) {
+            die "Error, --linked_copy target $copy_dir exists and is not empty\n";
+        }
+    }
+    if ($copy_dir eq $source_dir || index("$copy_dir/", "$source_dir/") == 0) {
+        die "Error, --linked_copy target must be outside $source_dir\n";
+    }
+    if (-d "$source_dir/supplemental/.lock") {
+        die "Error, $source_dir/supplemental/.lock exists: a supplement or revert may be running on it.\n";
+    }
+
+    ## check up front whether hard links are possible, to tell the user which kind of copy this is
+    unless (-d $copy_dir) {
+        mkdir($copy_dir) or die "Error, cannot mkdir $copy_dir: $!";
+    }
+    my $probe = "$copy_dir/.hardlink_probe.$$";
+    my $can_hardlink = link("$source_dir/ref_annot.gtf", $probe);
+    unlink($probe);
+
+    if ($can_hardlink) {
+        print STDERR "\n-WARNING: creating a linked copy of $source_dir\n"
+            . "  at $copy_dir using HARD LINKS: the copy's files will be the same files as the source's\n"
+            . "  (no extra disk space) until the supplement replaces them.\n"
+            . $HARDLINK_RULES . "\n";
+    }
+    else {
+        print STDERR "\n-WARNING: hard links to $source_dir are not possible here (different filesystem,\n"
+            . "  or files not owned by you), so the linked copy at $copy_dir will use SYMLINKS.\n"
+            . "  It will only work where $source_dir is visible at that same path\n"
+            . "  (eg. in a container, only if it is also mounted at that path).\n\n";
+    }
+
+    my @symlinked;
+    my $num_linked = 0;
+
+    my $copy_entry;
+    $copy_entry = sub {
+        my ($rel) = @_;
+        my $src = ($rel eq "") ? $source_dir : "$source_dir/$rel";
+        my $dest = ($rel eq "") ? $copy_dir : "$copy_dir/$rel";
+
+        if (-l $src) {
+            ## keep the lib's own symlinks as they are (eg. relative links within the lib)
+            symlink(readlink($src), $dest) or die "Error, cannot create symlink $dest: $!";
+        }
+        elsif (-d $src) {
+            unless (-d $dest) {
+                mkdir($dest) or die "Error, cannot mkdir $dest: $!";
+            }
+            opendir(my $dh, $src) or die "Error, cannot read dir $src: $!";
+            my @entries = sort grep { !/^\.\.?$/ } readdir($dh);
+            closedir($dh);
+            foreach my $entry (@entries) {
+                my $entry_rel = ($rel eq "") ? $entry : "$rel/$entry";
+                ## skip transient state of an in-progress supplement of the source lib
+                if ($entry_rel =~ m{^supplemental/\.work\.} || $entry_rel =~ /\.tmp\.\d+$/) { next; }
+                $copy_entry->($entry_rel);
+            }
+        }
+        elsif (link($src, $dest)) {
+            $num_linked++;
+        }
+        else {
+            symlink($src, $dest) or die "Error, cannot link or symlink $src to $dest: $!";
+            push (@symlinked, $rel);
+        }
+    };
+
+    eval { $copy_entry->(""); };
+    if ($@) {
+        my $err = $@;
+        rmtree($copy_dir);
+        die $err;
+    }
+
+    $num_copy_hardlinks = $num_linked;
+    $num_copy_symlinks = scalar(@symlinked);
+
+    print STDERR "-linked copy created: $num_linked files hard linked, " . scalar(@symlinked) . " symlinked\n";
+    if (@symlinked) {
+        print STDERR "\n-WARNING: " . scalar(@symlinked) . " files could not be hard linked (different filesystem, or\n"
+            . "  files not owned by you) and are symlinks to $source_dir instead, eg. $symlinked[0]\n"
+            . "  The copy will only work where that path is visible, eg. in a container only if\n"
+            . "  $source_dir is also mounted at that same path.\n\n";
+    }
+
+    return($copy_dir);
 }
 
 
