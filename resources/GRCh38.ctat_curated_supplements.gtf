@@ -1,0 +1,15 @@
+# Curated supplemental transcript models for GRCh38 CTAT genome libs.
+# Added to the annotation by prep_genome_lib.pl when building a GRCh38 lib with --human_gencode_filter
+# (see util/merge_supplemental_gtfs.pl), unless --no_curated_supplements is given.
+# Coordinates are GRCh38. Each transcript must be assignable to a gene of the reference annotation.
+chr17	cryptic_RARA	transcript	40309194	40356796	.	+	.	gene_id "ENSG00000131759.16"; transcript_id "ENST00000254066_crypticEx"; gene_name "RARA"; transcript_name "ENST00000254066_crypticEx";
+chr17	cryptic_RARA	exon	40309194	40309286	.	+	.	gene_id "ENSG00000131759.16"; transcript_id "ENST00000254066_crypticEx"; gene_name "RARA"; transcript_name "ENST00000254066_crypticEx"; exon_number "1";
+chr17	cryptic_RARA	exon	40330857	40331396	.	+	.	gene_id "ENSG00000131759.16"; transcript_id "ENST00000254066_crypticEx"; gene_name "RARA"; transcript_name "ENST00000254066_crypticEx"; exon_number "2";
+chr17	cryptic_RARA	exon	40343436	40343571	.	+	.	gene_id "ENSG00000131759.16"; transcript_id "ENST00000254066_crypticEx"; gene_name "RARA"; transcript_name "ENST00000254066_crypticEx"; exon_number "3";
+chr17	cryptic_RARA	exon	40348316	40348464	.	+	.	gene_id "ENSG00000131759.16"; transcript_id "ENST00000254066_crypticEx"; gene_name "RARA"; transcript_name "ENST00000254066_crypticEx"; exon_number "4";
+chr17	cryptic_RARA	exon	40349784	40349925	.	+	.	gene_id "ENSG00000131759.16"; transcript_id "ENST00000254066_crypticEx"; gene_name "RARA"; transcript_name "ENST00000254066_crypticEx"; exon_number "5";
+chr17	cryptic_RARA	exon	40351910	40352070	.	+	.	gene_id "ENSG00000131759.16"; transcript_id "ENST00000254066_crypticEx"; gene_name "RARA"; transcript_name "ENST00000254066_crypticEx"; exon_number "6";
+chr17	cryptic_RARA	exon	40352331	40352507	.	+	.	gene_id "ENSG00000131759.16"; transcript_id "ENST00000254066_crypticEx"; gene_name "RARA"; transcript_name "ENST00000254066_crypticEx"; exon_number "7";
+chr17	cryptic_RARA	exon	40354302	40354506	.	+	.	gene_id "ENSG00000131759.16"; transcript_id "ENST00000254066_crypticEx"; gene_name "RARA"; transcript_name "ENST00000254066_crypticEx"; exon_number "8";
+chr17	cryptic_RARA	exon	40355263	40355421	.	+	.	gene_id "ENSG00000131759.16"; transcript_id "ENST00000254066_crypticEx"; gene_name "RARA"; transcript_name "ENST00000254066_crypticEx"; exon_number "9";
+chr17	cryptic_RARA	exon	40356009	40356796	.	+	.	gene_id "ENSG00000131759.16"; transcript_id "ENST00000254066_crypticEx"; gene_name "RARA"; transcript_name "ENST00000254066_crypticEx"; exon_number "10";

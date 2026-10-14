@@ -56,6 +56,19 @@ my $usage = <<__EOUSAGE__;
 #  --outTmpDir	<string>	   passed to STAR (very useful if local disks are faster than network disks)
 #
 #  --human_gencode_filter      customized prep operations for human/gencode genome and annotation data.
+#                              For a GRCh38 build, this includes adding the curated supplemental transcript
+#                              models in resources/GRCh38.ctat_curated_supplements.gtf
+#
+#  --genome_build <string>         genome build, eg. GRCh38 or GRCh37 (default: GRCh38 if the --genome_fa
+#                                  file name includes 'GRCh38', otherwise unspecified)
+#
+#  --no_curated_supplements        with --human_gencode_filter, don't add the curated GRCh38 supplemental
+#                                  transcript models
+#
+#  --supp_gtf <string>             additional transcript models (GTF) to add to the annotation (can be given
+#                                  more than once). Each transcript is assigned to a gene of --gtf (by gene_id,
+#                                  ref_gene_id, version-stripped gene_id, or gene_name; see
+#                                  util/merge_supplemental_gtfs.pl) and must overlap it.
 #
 ##################################################################################
 
@@ -79,6 +92,9 @@ my $SKIP_STAR_FLAG = 0;
 my $STAR_ONLY_FLAG = 0;
 
 my $HUMAN_GENCODE_FILTER = 0;
+my $genome_build;
+my $NO_CURATED_SUPPLEMENTS = 0;
+my @supp_gtfs;
 
 &GetOptions ( 'h' => \$help_flag,
 
@@ -95,6 +111,9 @@ my $HUMAN_GENCODE_FILTER = 0;
               'outTmpDir=s' => \$outTmpDir,
 
               'human_gencode_filter' => \$HUMAN_GENCODE_FILTER,
+              'genome_build=s' => \$genome_build,
+              'no_curated_supplements' => \$NO_CURATED_SUPPLEMENTS,
+              'supp_gtf=s' => \@supp_gtfs,
               
               'fusion_annot_lib=s' => \$fusion_annot_lib,
    
@@ -144,6 +163,12 @@ $genome_fa_file = &Pipeliner::ensure_full_path($genome_fa_file) if $genome_fa_fi
 $gtf_file = &Pipeliner::ensure_full_path($gtf_file) if $gtf_file;
 $output_dir = &Pipeliner::ensure_full_path($output_dir) if $output_dir;
 $fusion_annot_lib = &Pipeliner::ensure_full_path($fusion_annot_lib) if $fusion_annot_lib;
+@supp_gtfs = map { &Pipeliner::ensure_full_path($_) } @supp_gtfs;
+foreach my $supp_gtf (@supp_gtfs) {
+    unless (-s $supp_gtf) {
+        die "Error, cannot locate --supp_gtf file: $supp_gtf";
+    }
+}
 
 my $UTILDIR = $FindBin::Bin . "/util";
 
@@ -199,7 +224,33 @@ main: {
     my $genome_fa_for_STAR_index = $genome_fa_file;
 
 
-    my $is_grch38 = ($genome_fa_file =~ /GRCh38/i) ? 1 : 0;
+    my $is_grch38;
+    if (defined $genome_build) {
+        $is_grch38 = ($genome_build =~ /^(GRCh38|hg38)$/i) ? 1 : 0;
+        print STDERR "-genome build: $genome_build (from --genome_build)\n";
+    }
+    else {
+        $is_grch38 = ($genome_fa_file =~ /GRCh38/i) ? 1 : 0;
+        print STDERR "-genome build: " . ($is_grch38 ? "GRCh38 (the genome file name includes 'GRCh38')"
+                                          : "not GRCh38 (the genome file name doesn't include 'GRCh38'; see --genome_build)") . "\n";
+    }
+
+    ## curated supplemental transcript models, then any given with --supp_gtf
+    my @build_supp_gtfs;
+    if ($HUMAN_GENCODE_FILTER && $is_grch38) {
+        if ($NO_CURATED_SUPPLEMENTS) {
+            print STDERR "-not adding curated GRCh38 supplemental transcript models (--no_curated_supplements)\n";
+        }
+        else {
+            my $curated_gtf = "$FindBin::Bin/resources/GRCh38.ctat_curated_supplements.gtf";
+            unless (-s $curated_gtf) {
+                die "Error, cannot locate curated supplements file: $curated_gtf";
+            }
+            print STDERR "-adding curated GRCh38 supplemental transcript models: $curated_gtf\n";
+            push (@build_supp_gtfs, [$curated_gtf, "CTAT_CURATED"]);
+        }
+    }
+    push (@build_supp_gtfs, map { [$_, "SUPPLEMENTAL"] } @supp_gtfs);
     
     if ($HUMAN_GENCODE_FILTER) {
         
@@ -213,7 +264,34 @@ main: {
         
         
         $gtf_file = $customized_gtf;
-        
+    }
+
+    if (@build_supp_gtfs) {
+        ## each supplement is normalized against the annotation and the supplements before it.
+        my $supplemented_gtf = "$gtf_file.supplemented.gtf";
+        my $prev_gtf = $gtf_file;
+        my @provenance_files;
+        for (my $i = 0; $i <= $#build_supp_gtfs; $i++) {
+            my ($supp_gtf, $source_tag) = @{$build_supp_gtfs[$i]};
+            my $out_gtf = "$supplemented_gtf.$i";
+            $cmd = "$UTILDIR/merge_supplemental_gtfs.pl --in_gtf $prev_gtf --supp_gtf $supp_gtf --source_tag $source_tag "
+                . " --out_gtf $out_gtf --provenance_out $out_gtf.provenance";
+            $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/supplemented_gtf.$i.ok"));
+            push (@provenance_files, "$out_gtf.provenance");
+            $prev_gtf = $out_gtf;
+        }
+        $cmd = "cp $prev_gtf $supplemented_gtf";
+        $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/supplemented_gtf.ok"));
+
+        ## record which supplements the lib was built with
+        $cmd = "bash -c \" set -euo pipefail; head -n1 $provenance_files[0] > $output_dir/ref_annot.build_supplements.tsv; "
+            . " for f in @provenance_files; do tail -n +2 \\\$f; done >> $output_dir/ref_annot.build_supplements.tsv \" ";
+        $pipeliner->add_commands(new Command($cmd, "$output_dir_checkpoints_dir/ref_annot.build_supplements.ok"));
+
+        $gtf_file = $supplemented_gtf;
+    }
+
+    if ($HUMAN_GENCODE_FILTER) {
         my $masked_genome_fa_file = "$genome_fa_file.pseudo_masked.fa";
         $cmd = "$UTILDIR/mask_confounding_features_from_genome.pl --gencode_gtf $gtf_file --genome_fa $genome_fa_file_for_blast --out_masked $masked_genome_fa_file --is_grch38 $is_grch38 ";
         $pipeliner->add_commands(new Command($cmd, "$local_checkpoints_dir/pseudo_mask_genome.ok"));
