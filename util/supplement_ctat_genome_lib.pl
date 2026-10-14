@@ -68,6 +68,9 @@ my $usage = <<__EOUSAGE__;
 #
 #   --dry_run                     validate and normalize the supplement, report, and change nothing
 #
+#   --dry_run_out <string>        with --dry_run, write the normalized supplement (as it would be added to
+#                                 the lib, with gene assignments applied) to this file
+#
 #  Supplemental transcripts are assigned to reference genes, in order of preference, by:
 #     gene_id, ref_gene_id (eg. StringTie), version-stripped gene_id/ref_gene_id (reference genes
 #     only, same chr and strand), gene_name/ref_gene_name (same chr and strand), then exon overlap
@@ -99,6 +102,7 @@ my $novel_gene_type = "novel_gene";
 my $dry_run_flag = 0;
 my $linked_copy;
 my $allow_nonoverlapping_flag = 0;
+my $dry_run_out;
 
 &GetOptions ( 'h' => \$help_flag,
               'genome_lib_dir=s' => \$genome_lib_dir,
@@ -110,6 +114,7 @@ my $allow_nonoverlapping_flag = 0;
               'dry_run' => \$dry_run_flag,
               'linked_copy=s' => \$linked_copy,
               'allow_nonoverlapping' => \$allow_nonoverlapping_flag,
+              'dry_run_out=s' => \$dry_run_out,
     );
 
 if ($help_flag) {
@@ -122,6 +127,9 @@ unless ($genome_lib_dir && $supp_gtf) {
 
 if (@ARGV) {
     die "Error, unrecognized parameters: @ARGV\n";
+}
+if ($dry_run_out && ! $dry_run_flag) {
+    die "Error, --dry_run_out requires --dry_run\n";
 }
 
 ## (not Process_cmd::ensure_full_path, which splits paths on commas)
@@ -335,6 +343,10 @@ main: {
     }
 
     if ($dry_run_flag) {
+        if ($dry_run_out && $normalized_gtf) {
+            copy($normalized_gtf, $dry_run_out) or die "Error, cannot write $dry_run_out: $!";
+            print STDERR "-dry run: normalized supplement written to $dry_run_out\n";
+        }
         print STDERR "\n-dry run: genome lib unchanged.\n\n";
         exit(0);
     }

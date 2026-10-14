@@ -57,6 +57,8 @@ check "both unassignable transcripts reported" "[ \$(grep -c 'could not be assig
 run $UTILDIR/supplement_ctat_genome_lib.pl --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --dry_run --assign_by_overlap --allow_novel_genes
 check "dry run with flags succeeds" "[ $? -eq 0 ]"
 check "dry run leaves lib unchanged" "diff -r $OUT/pristine $WORK > /dev/null"
+run $UTILDIR/supplement_ctat_genome_lib.pl --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --dry_run --assign_by_overlap --allow_novel_genes --dry_run_out $OUT/dry_run.gtf
+check "--dry_run_out writes the normalized supplement" "[ $? -eq 0 ] && grep -q 'gene_id \"ENSG00000078808.12\"; transcript_id \"STRG.1.1\"' $OUT/dry_run.gtf && diff -r $OUT/pristine $WORK > /dev/null"
 
 
 echo "## supplement 1 (isoforms of an existing gene, a novel gene)"
