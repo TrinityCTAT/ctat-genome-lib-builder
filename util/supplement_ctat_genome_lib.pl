@@ -10,9 +10,13 @@ use File::Basename;
 use File::Copy;
 use File::Path;
 use File::Temp qw(tempdir);
+use File::Spec;
+use Cwd qw(abs_path);
+use Sys::Hostname;
 use Digest::MD5;
 use JSON::PP;
 use DB_File;
+use Fcntl qw(O_WRONLY O_CREAT O_EXCL);
 use Process_cmd;
 
 
@@ -57,11 +61,17 @@ my $usage = <<__EOUSAGE__;
 #                                 have write access to them), otherwise symlinks are used instead and
 #                                 the copy only works where the original lib is visible at its path.
 #
+#   --allow_nonoverlapping        allow a transcript to be assigned (by gene_id or gene_name) to a gene
+#                                 whose span it does not overlap, extending that gene's span to include it
+#                                 (default: report it and stop; this usually indicates a different genome
+#                                 build, or a gene_id/gene_name reused for an unrelated locus)
+#
 #   --dry_run                     validate and normalize the supplement, report, and change nothing
 #
 #  Supplemental transcripts are assigned to reference genes, in order of preference, by:
-#     gene_id, ref_gene_id (eg. StringTie), version-stripped gene_id/ref_gene_id,
-#     gene_name/ref_gene_name (same chr and strand), then exon overlap (--assign_by_overlap).
+#     gene_id, ref_gene_id (eg. StringTie), version-stripped gene_id/ref_gene_id (reference genes
+#     only, same chr and strand), gene_name/ref_gene_name (same chr and strand), then exon overlap
+#     (--assign_by_overlap).
 #  Assigned transcripts are rewritten to carry the reference gene's gene_id, gene_name and gene_type.
 #
 #  Files updated:
@@ -88,6 +98,7 @@ my $allow_novel_genes_flag = 0;
 my $novel_gene_type = "novel_gene";
 my $dry_run_flag = 0;
 my $linked_copy;
+my $allow_nonoverlapping_flag = 0;
 
 &GetOptions ( 'h' => \$help_flag,
               'genome_lib_dir=s' => \$genome_lib_dir,
@@ -98,6 +109,7 @@ my $linked_copy;
               'novel_gene_type=s' => \$novel_gene_type,
               'dry_run' => \$dry_run_flag,
               'linked_copy=s' => \$linked_copy,
+              'allow_nonoverlapping' => \$allow_nonoverlapping_flag,
     );
 
 if ($help_flag) {
@@ -112,8 +124,14 @@ if (@ARGV) {
     die "Error, unrecognized parameters: @ARGV\n";
 }
 
-$genome_lib_dir = &ensure_full_path($genome_lib_dir);
-$supp_gtf = &ensure_full_path($supp_gtf);
+## (not Process_cmd::ensure_full_path, which splits paths on commas)
+$genome_lib_dir = File::Spec->rel2abs($genome_lib_dir);
+$genome_lib_dir =~ s{/+$}{};
+$supp_gtf = File::Spec->rel2abs($supp_gtf);
+
+## run END cleanup (lock, temp files, incomplete linked copy) when interrupted
+my $terminated_by_signal = 0;
+$SIG{INT} = $SIG{TERM} = $SIG{HUP} = sub { $terminated_by_signal = 1; die "\nError, terminated by signal $_[0]\n"; };
 
 my $HARDLINK_RULES = <<__EORULES__;
   Hard-linked files share storage: they are the same file under two names. So:
@@ -129,8 +147,11 @@ my $num_copy_symlinks = 0;
 
 my $source_lib_dir;
 my $created_copy_dir; # set only once this run has created the linked copy; removed on failure
-if ($linked_copy && ! $dry_run_flag) {
-    my $copy_dir = &create_linked_copy($genome_lib_dir, &ensure_full_path($linked_copy));
+if ($linked_copy && $dry_run_flag) {
+    print STDERR "-NOTE: --dry_run: checking the supplement against $genome_lib_dir; no linked copy is created.\n";
+}
+elsif ($linked_copy) {
+    my $copy_dir = &create_linked_copy($genome_lib_dir, File::Spec->rel2abs($linked_copy));
     $created_copy_dir = $copy_dir;
     $source_lib_dir = $genome_lib_dir;
     $genome_lib_dir = $copy_dir;
@@ -187,93 +208,134 @@ main: {
                 . "  (for a read-only install, use --linked_copy to supplement a copy)\n";
         }
         &acquire_lock();
+        ## safe only while holding the lock: anything left by an earlier, interrupted run
+        &remove_stale_files();
     }
 
     my $manifest = &read_manifest();
     if ($source_lib_dir) {
+        if ($manifest->{source_lib}) {
+            ## a linked copy of a linked copy: keep the chain
+            $manifest->{earlier_source_libs} = [ @{$manifest->{earlier_source_libs} || []}, $manifest->{source_lib} ];
+        }
         $manifest->{source_lib} = $source_lib_dir;
         $manifest->{source_lib_links} = { hard_links => $num_copy_hardlinks, symlinks => $num_copy_symlinks };
     }
 
     &check_backup_state($manifest);
+    unless ($dry_run_flag) {
+        &remove_orphan_supplement_files($manifest);
+    }
 
-    my $supp_id = sprintf("supp_%03d", scalar(@{$manifest->{supplements}}) + 1);
-    foreach my $prev (@{$manifest->{supplements}}) {
-        if ($prev->{label} eq $label) {
-            die "Error, a supplement labeled '$label' was already added ($prev->{normalized_gtf}). Use a different --label.\n";
+    ## a supplement whose commit was interrupted is recorded with status 'committing'. Each run rebuilds
+    ## the lib files from the originals plus every recorded supplement, so any run completes it;
+    ## rerunning the interrupted command (same --label) completes it without adding anything new.
+    my $resume_id;
+    my @interrupted = grep { ($_->{status} || "complete") ne "complete" } @{$manifest->{supplements}};
+    my $resume_flag = 0;
+    if (@interrupted) {
+        if (my ($entry) = grep { $_->{label} eq $label } @interrupted) {
+            $resume_flag = 1;
+            $resume_id = $entry->{id};
+            print STDERR "-supplement '$label' was interrupted while being committed; completing it.\n";
+        }
+        else {
+            print STDERR "-NOTE: supplement(s) " . join(", ", map { "'$_->{label}'" } @interrupted)
+                . " were interrupted while being committed; this run completes them.\n";
+        }
+    }
+
+    my $supp_id = $resume_id || sprintf("supp_%03d", scalar(@{$manifest->{supplements}}) + 1);
+    unless ($resume_flag) {
+        foreach my $prev (@{$manifest->{supplements}}) {
+            if ($prev->{label} eq $label) {
+                die "Error, a supplement labeled '$label' was already added ($prev->{normalized_gtf}). Use a different --label.\n";
+            }
         }
     }
 
     if ($dry_run_flag) {
-        $WORKDIR = tempdir("supplement_ctat_genome_lib.XXXXXX", TMPDIR => 1);
+        $WORKDIR = tempdir("supplement_ctat_genome_lib.XXXXXX", TMPDIR => 1, CLEANUP => 1);
     }
     else {
         $WORKDIR = "$SUPP_DIR/.work.$$";
-        mkpath($WORKDIR) or die "Error, cannot mkdir $WORKDIR";
+        mkpath($WORKDIR);
+        unless (-d $WORKDIR) {
+            die "Error, cannot mkdir $WORKDIR";
+        }
     }
-
-    ######################################
-    ## load reference gene and transcript info
-
-    print STDERR "-loading reference gene spans\n";
-    my $genes_href = &load_gene_spans(&src_file("ref_annot.gtf.gene_spans"));
 
     my @prior_supp_gtfs = map { "$SUPP_DIR/" . $_->{normalized_gtf} } @{$manifest->{supplements}};
 
-    ## genes introduced by earlier supplements are valid assignment targets too.
-    &add_prior_supplement_genes($genes_href, \@prior_supp_gtfs);
+    my $report;
+    my $normalized_gtf;
 
-    my $lookup = &build_gene_lookups($genes_href);
+    unless ($resume_flag) {
 
-    print STDERR "-loading reference transcript ids\n";
-    my %existing_transcript_ids;
-    &load_transcript_ids(&src_file("ref_annot.gtf"), \%existing_transcript_ids, "reference");
-    foreach my $prior_gtf (@prior_supp_gtfs) {
-        &load_transcript_ids($prior_gtf, \%existing_transcript_ids, "earlier supplement");
-    }
+        ######################################
+        ## load reference gene and transcript info
 
-    my $ref_exons_href;
-    if ($assign_by_overlap_flag) {
-        print STDERR "-loading reference exons for overlap-based assignment\n";
-        my @exon_record_files = (&src_file("ref_annot.gtf.mini.sortu"));
-        if (@prior_supp_gtfs) {
-            ## include exons added by earlier supplements
-            my $prior_exons = "$WORKDIR/prior_supplements.mini";
-            &process_cmd("cat " . join(" ", @prior_supp_gtfs) . " | $UTILDIR/gtf_to_exon_gene_records.pl /dev/stdin > $prior_exons");
-            push (@exon_record_files, $prior_exons);
+        print STDERR "-loading reference gene spans\n";
+        my $genes_href = &load_gene_spans(&src_file("ref_annot.gtf.gene_spans"));
+
+        ## genes introduced by earlier supplements are valid assignment targets too.
+        &add_prior_supplement_genes($genes_href, \@prior_supp_gtfs);
+
+        my $lookup = &build_gene_lookups($genes_href);
+
+        print STDERR "-loading reference transcript ids\n";
+        my %existing_transcript_ids;
+        &load_transcript_ids(&src_file("ref_annot.gtf"), \%existing_transcript_ids, "reference");
+        foreach my $prior_gtf (@prior_supp_gtfs) {
+            &load_transcript_ids($prior_gtf, \%existing_transcript_ids, "earlier supplement");
         }
-        $ref_exons_href = &load_ref_exons(\@exon_record_files, $genes_href);
+
+        my $ref_exons_href;
+        if ($assign_by_overlap_flag) {
+            print STDERR "-loading reference exons for overlap-based assignment\n";
+            my @exon_record_files = (&src_file("ref_annot.gtf.mini.sortu"));
+            if (@prior_supp_gtfs) {
+                ## include exons added by earlier supplements
+                my $prior_exons = "$WORKDIR/prior_supplements.mini";
+                &process_cmd("cat " . join(" ", map { &shq($_) } @prior_supp_gtfs)
+                             . " | " . &shq("$UTILDIR/gtf_to_exon_gene_records.pl") . " /dev/stdin > " . &shq($prior_exons));
+                push (@exon_record_files, $prior_exons);
+            }
+            $ref_exons_href = &load_ref_exons(\@exon_record_files, $genes_href);
+        }
+
+        ######################################
+        ## parse, validate and normalize the supplement
+
+        print STDERR "-parsing supplemental gtf: $supp_gtf\n";
+        my ($transcripts_href, $parse_report) = &parse_supplemental_gtf($supp_gtf);
+
+        my $normalized_lines_aref;
+        ($normalized_lines_aref, $report) = &assign_and_normalize($transcripts_href, $genes_href, $lookup,
+                                                                   \%existing_transcript_ids, $ref_exons_href);
+        $report->{skipped_unstranded} = $parse_report->{skipped_unstranded};
+        $report->{dropped_gene_records} = $parse_report->{dropped_gene_records};
+        unshift (@{$report->{errors}}, @{$parse_report->{errors}});
+
+        &print_report($report);
+
+        if (@{$report->{errors}}) {
+            my $num_errors = scalar(@{$report->{errors}});
+            my @show = @{$report->{errors}};
+            if (@show > 25) { @show = @show[0..24]; }
+            die "\nError, $num_errors problem(s) found in the supplemental gtf; no changes made to the genome lib:\n  "
+                . join("\n  ", @show) . "\n" . ($num_errors > 25 ? "  ...\n" : "") . "\n";
+        }
+        unless (@$normalized_lines_aref) {
+            die "Error, no supplemental transcripts remain after normalization; no changes made.\n";
+        }
+
+        $normalized_gtf = "$WORKDIR/$supp_id.$label.gtf";
+        &write_lines($normalized_gtf, $normalized_lines_aref);
     }
-
-    ######################################
-    ## parse, validate and normalize the supplement
-
-    print STDERR "-parsing supplemental gtf: $supp_gtf\n";
-    my ($transcripts_href, $parse_report) = &parse_supplemental_gtf($supp_gtf);
-
-    my ($normalized_lines_aref, $report) = &assign_and_normalize($transcripts_href, $genes_href, $lookup,
-                                                                  \%existing_transcript_ids, $ref_exons_href);
-    $report->{skipped_unstranded} = $parse_report->{skipped_unstranded};
-    $report->{dropped_gene_records} = $parse_report->{dropped_gene_records};
-
-    &print_report($report);
-
-    if (@{$report->{errors}}) {
-        my $num_errors = scalar(@{$report->{errors}});
-        my @show = @{$report->{errors}};
-        if (@show > 25) { @show = @show[0..24]; }
-        die "\nError, $num_errors problem(s) found in the supplemental gtf; no changes made to the genome lib:\n  "
-            . join("\n  ", @show) . "\n" . ($num_errors > 25 ? "  ...\n" : "") . "\n";
-    }
-    unless (@$normalized_lines_aref) {
-        die "Error, no supplemental transcripts remain after normalization; no changes made.\n";
-    }
-
-    my $normalized_gtf = "$WORKDIR/$supp_id.$label.gtf";
-    &write_lines($normalized_gtf, $normalized_lines_aref);
 
     if ($dry_run_flag) {
-        print STDERR "\n-dry run: normalized supplement written to $normalized_gtf ; genome lib unchanged.\n\n";
+        print STDERR "\n-dry run: genome lib unchanged.\n\n";
         exit(0);
     }
 
@@ -281,7 +343,7 @@ main: {
     ## combine all supplements and build replacement lib files (nothing in the lib changes yet)
 
     my $combined_gtf = "$WORKDIR/all_supplements.gtf";
-    &process_cmd("cat " . join(" ", @prior_supp_gtfs, $normalized_gtf) . " > $combined_gtf");
+    &process_cmd("cat " . join(" ", map { &shq($_) } @prior_supp_gtfs, ($normalized_gtf || ())) . " > " . &shq($combined_gtf));
 
     my $combined_has_CDS = &gtf_has_feature($combined_gtf, "CDS");
 
@@ -305,11 +367,25 @@ main: {
         print STDERR "-supplements contain no CDS records; ref_annot.prot_info.dbm left unchanged.\n";
     }
 
-    &check_disk_space(\@managed);
+    ## check required tools before any of the (large) copies are made
+    if (grep { $_ eq "ref_annot.gtf.mm2.splice.bed" } @managed) {
+        &require_tool("k8", "to update ref_annot.gtf.mm2.splice.bed (paftools)");
+    }
+    if ($combined_has_CDS) {
+        &require_tool("samtools", "to update ref_annot.prot_info.dbm for supplements with CDS records");
+    }
+
+    &check_disk_space(\@managed, ($combined_has_CDS ? &prot_info_workspace_estimate($combined_gtf) : 0));
 
     my %tmp_outputs;
     foreach my $file (@managed) {
-        $tmp_outputs{$file} = "$genome_lib_dir/$file.tmp.$$";
+        my $tmp = "$genome_lib_dir/$file.tmp.$$";
+        ## never write into an existing file: it could be a hard link to a lib file
+        unlink($tmp);
+        if (-e $tmp || -l $tmp) {
+            die "Error, cannot remove $tmp";
+        }
+        $tmp_outputs{$file} = $tmp;
     }
 
     print STDERR "-building ref_annot.gtf\n";
@@ -334,8 +410,20 @@ main: {
         &build_prot_info($combined_gtf, \%tmp_outputs);
     }
 
+    ## guard, before anything in the lib changes: each replacement must be a new file, sharing
+    ## storage with neither the current lib file nor its original
+    foreach my $file (@managed) {
+        my $tmp_inode = (stat($tmp_outputs{$file}))[1];
+        foreach my $existing ("$genome_lib_dir/$file", "$genome_lib_dir/$file.bkup") {
+            my $inode = (stat($existing))[1];
+            if (defined $inode && $tmp_inode == $inode) {
+                die "Error, replacement for $file shares storage with $existing; refusing to commit";
+            }
+        }
+    }
+
     ######################################
-    ## commit: back up originals (first time only), then move the new files into place
+    ## commit: back up originals (first time only), record the supplement, then move the new files into place
 
     print STDERR "-committing changes to $genome_lib_dir\n";
 
@@ -343,26 +431,28 @@ main: {
         my $lib_file = "$genome_lib_dir/$file";
         my $bkup = "$lib_file.bkup";
         unless (-e $bkup) {
+            my $bkup_tmp = "$bkup.tmp.$$";
+            unlink($bkup_tmp);
             ## A hard link is safe here because lib files are never written in place: each is
             ## replaced by renaming a separately built file over it, leaving .bkup the only link
             ## to the original. Otherwise copy-on-write where supported, or a regular copy.
             if (-l $lib_file) {
                 ## a symlinked file in a linked copy: the backup points at the same original
-                symlink(readlink($lib_file), "$bkup.tmp.$$") or die "Error, cannot create symlink $bkup.tmp.$$: $!";
+                symlink(readlink($lib_file), $bkup_tmp) or die "Error, cannot create symlink $bkup_tmp: $!";
                 print STDERR "\t-backing up original $file -> $file.bkup (SYMLINK to the original)\n";
             }
-            elsif (link($lib_file, "$bkup.tmp.$$")) {
+            elsif (link($lib_file, $bkup_tmp)) {
                 print STDERR "\t-backing up original $file -> $file.bkup (HARD LINK to the original; no extra disk space)\n";
                 $num_hardlinked_backups++;
             }
             else {
                 print STDERR "\t-backing up original $file -> $file.bkup (copy)\n";
-                my $ret = system("cp -p --reflink=auto $lib_file $bkup.tmp.$$ 2>/dev/null");
+                my $ret = system("cp -p --reflink=auto " . &shq($lib_file) . " " . &shq($bkup_tmp) . " 2>/dev/null");
                 if ($ret) {
-                    &process_cmd("cp -p $lib_file $bkup.tmp.$$");
+                    &process_cmd("cp -p " . &shq($lib_file) . " " . &shq($bkup_tmp));
                 }
             }
-            rename("$bkup.tmp.$$", $bkup) or die "Error, cannot rename $bkup.tmp.$$ to $bkup";
+            rename($bkup_tmp, $bkup) or die "Error, cannot rename $bkup_tmp to $bkup";
             $manifest->{backups}->{$file} = &md5_file($bkup);
             ## record each backup as soon as it exists
             &write_manifest($manifest);
@@ -372,35 +462,41 @@ main: {
         }
     }
 
-    copy($supp_gtf, "$SUPP_DIR/$supp_id.$label.input.gtf") or die "Error, cannot copy $supp_gtf to $SUPP_DIR: $!";
-    rename($normalized_gtf, "$SUPP_DIR/$supp_id.$label.gtf") or die "Error, cannot move $normalized_gtf to $SUPP_DIR";
+    unless ($resume_flag) {
+        copy($supp_gtf, "$SUPP_DIR/$supp_id.$label.input.gtf") or die "Error, cannot copy $supp_gtf to $SUPP_DIR: $!";
+        rename($normalized_gtf, "$SUPP_DIR/$supp_id.$label.gtf") or die "Error, cannot move $normalized_gtf to $SUPP_DIR";
 
-    ## guard: a replacement must be a new file, never the original (or a link to it)
-    foreach my $file (@managed) {
-        my $tmp_inode = (stat($tmp_outputs{$file}))[1];
-        my $orig_inode = (stat("$genome_lib_dir/$file.bkup"))[1];
-        if ($tmp_inode == $orig_inode) {
-            die "Error, replacement for $file shares storage with the original; refusing to commit";
-        }
+        ## recorded before the lib files are replaced, so that an interrupted commit is completed by
+        ## the next run rather than silently dropped
+        push (@{$manifest->{supplements}}, { id => $supp_id,
+                                             label => $label,
+                                             status => "committing",
+                                             added => scalar(localtime()),
+                                             input_gtf => $supp_gtf,
+                                             input_gtf_copy => "$supp_id.$label.input.gtf",
+                                             normalized_gtf => "$supp_id.$label.gtf",
+                                             options => { assign_by_overlap => $assign_by_overlap_flag,
+                                                          allow_novel_genes => $allow_novel_genes_flag,
+                                                          allow_nonoverlapping => $allow_nonoverlapping_flag,
+                                                          novel_gene_type => $novel_gene_type },
+                                             num_transcripts => $report->{num_transcripts_kept},
+                                             num_existing_genes => scalar(keys %{$report->{existing_genes}}),
+                                             num_earlier_supplement_genes => scalar(keys %{$report->{earlier_supplement_genes}}),
+                                             num_novel_genes => scalar(keys %{$report->{novel_genes}}),
+                                           } );
     }
+    foreach my $supp (@{$manifest->{supplements}}) {
+        $supp->{status} = "committing";
+    }
+    &write_manifest($manifest);
 
     foreach my $file (@managed) {
         rename($tmp_outputs{$file}, "$genome_lib_dir/$file") or die "Error, cannot rename $tmp_outputs{$file} to $genome_lib_dir/$file";
     }
 
-    push (@{$manifest->{supplements}}, { id => $supp_id,
-                                         label => $label,
-                                         added => scalar(localtime()),
-                                         input_gtf => $supp_gtf,
-                                         input_gtf_copy => "$supp_id.$label.input.gtf",
-                                         normalized_gtf => "$supp_id.$label.gtf",
-                                         options => { assign_by_overlap => $assign_by_overlap_flag,
-                                                      allow_novel_genes => $allow_novel_genes_flag,
-                                                      novel_gene_type => $novel_gene_type },
-                                         num_transcripts => $report->{num_transcripts_kept},
-                                         num_existing_genes => scalar(keys %{$report->{existing_genes}}),
-                                         num_novel_genes => scalar(keys %{$report->{novel_genes}}),
-                                       } );
+    foreach my $supp (@{$manifest->{supplements}}) {
+        $supp->{status} = "complete";
+    }
     $manifest->{modified_files} = [ sort keys %{$manifest->{backups}} ];
     $manifest->{last_updated} = scalar(localtime());
     &write_manifest($manifest);
@@ -443,16 +539,26 @@ END {
         $have_lock = 0;
     }
     elsif ($WORKDIR && -d $WORKDIR && $? != 0) {
-        print STDERR "-work files retained for inspection: $WORKDIR\n";
+        if ($terminated_by_signal) {
+            rmtree($WORKDIR);
+        }
+        else {
+            print STDERR "-work files retained for inspection: $WORKDIR\n";
+        }
     }
     if ($have_lock) {
         if ($? != 0) {
             ## remove any partially-built replacement files.
-            foreach my $tmp (glob("$genome_lib_dir/*.tmp.$$")) {
-                unlink($tmp);
+            if (opendir(my $dh, $genome_lib_dir)) {
+                foreach my $entry (readdir($dh)) {
+                    if ($entry =~ /\.tmp\.(\d+)$/ && $1 == $$) {
+                        unlink("$genome_lib_dir/$entry");
+                    }
+                }
+                closedir($dh);
             }
         }
-        rmdir($LOCK_DIR);
+        &release_lock();
     }
     ## consistent failure status (die otherwise exits with whatever errno was last set)
     if ($? != 0) {
@@ -465,23 +571,29 @@ END {
 sub create_linked_copy {
     my ($source_dir, $copy_dir) = @_;
 
-    $source_dir =~ s{/+$}{};
+    ## resolve symlinks, so the checks below compare real locations
+    unless (-d $source_dir) {
+        die "Error, cannot locate genome lib dir: $source_dir";
+    }
+    $source_dir = abs_path($source_dir);
     $copy_dir =~ s{/+$}{};
+    if (-e $copy_dir || -l $copy_dir) {
+        unless (-d $copy_dir) {
+            die "Error, --linked_copy target $copy_dir exists and is not a directory\n";
+        }
+        $copy_dir = abs_path($copy_dir);
+    }
+    else {
+        my $parent = dirname($copy_dir);
+        unless (-d $parent) {
+            die "Error, parent directory of --linked_copy target does not exist: $parent\n";
+        }
+        $copy_dir = abs_path($parent) . "/" . basename($copy_dir);
+    }
 
     ## a new lib whose files are hard links to those of the source lib; supplementing it
     ## replaces only its own links, leaving the source lib unchanged.
 
-    unless (-d $source_dir) {
-        die "Error, cannot locate genome lib dir: $source_dir";
-    }
-    if (-e $copy_dir) {
-        opendir(my $dh, $copy_dir) or die "Error, $copy_dir exists and is not a directory\n";
-        my @entries = grep { !/^\.\.?$/ } readdir($dh);
-        closedir($dh);
-        if (@entries) {
-            die "Error, --linked_copy target $copy_dir exists and is not empty\n";
-        }
-    }
     if ($copy_dir eq $source_dir || index("$copy_dir/", "$source_dir/") == 0) {
         die "Error, --linked_copy target must be outside $source_dir\n";
     }
@@ -489,10 +601,23 @@ sub create_linked_copy {
         die "Error, $source_dir/supplemental/.lock exists: a supplement or revert may be running on it.\n";
     }
 
-    ## check up front whether hard links are possible, to tell the user which kind of copy this is
+    ## claim the target: create it, or use it if it is an existing empty directory, then create a
+    ## marker exclusively so that two runs can never both build (or later remove) the same copy.
     unless (-d $copy_dir) {
         mkdir($copy_dir) or die "Error, cannot mkdir $copy_dir: $!";
     }
+    opendir(my $dh, $copy_dir) or die "Error, cannot read $copy_dir: $!";
+    my @existing = grep { !/^\.\.?$/ } readdir($dh);
+    closedir($dh);
+    if (@existing) {
+        die "Error, --linked_copy target $copy_dir exists and is not empty\n";
+    }
+    my $claim = "$copy_dir/.linked_copy_in_progress";
+    sysopen(my $claim_fh, $claim, O_WRONLY | O_CREAT | O_EXCL)
+        or die "Error, cannot claim $copy_dir (another run may be creating a copy there): $!\n";
+    print $claim_fh hostname() . " $$\n";
+    close $claim_fh;
+
     my $probe = "$copy_dir/.hardlink_probe.$$";
     my $can_hardlink = link("$source_dir/ref_annot.gtf", $probe);
     unlink($probe);
@@ -533,7 +658,8 @@ sub create_linked_copy {
             foreach my $entry (@entries) {
                 my $entry_rel = ($rel eq "") ? $entry : "$rel/$entry";
                 ## skip transient state of an in-progress supplement of the source lib
-                if ($entry_rel =~ m{^supplemental/\.work\.} || $entry_rel =~ /\.tmp\.\d+$/) { next; }
+                if ($entry_rel =~ m{^supplemental/\.(work|lock)} || $entry_rel =~ /\.tmp\.[\d\.]+$/
+                    || $entry_rel eq ".linked_copy_in_progress") { next; }
                 $copy_entry->($entry_rel);
             }
         }
@@ -546,12 +672,11 @@ sub create_linked_copy {
         }
     };
 
-    eval { $copy_entry->(""); };
-    if ($@) {
-        my $err = $@;
-        rmtree($copy_dir);
-        die $err;
-    }
+    ## from here on, this run owns $copy_dir: END removes it if the run fails
+    $created_copy_dir = $copy_dir;
+
+    $copy_entry->("");
+    unlink($claim);
 
     $num_copy_hardlinks = $num_linked;
     $num_copy_symlinks = scalar(@symlinked);
@@ -572,14 +697,117 @@ sub create_linked_copy {
 sub acquire_lock {
 
     unless (-d $SUPP_DIR) {
-        mkpath($SUPP_DIR) or die "Error, cannot mkdir $SUPP_DIR";
+        mkpath($SUPP_DIR);
+        unless (-d $SUPP_DIR) {
+            die "Error, cannot mkdir $SUPP_DIR";
+        }
     }
     unless (mkdir($LOCK_DIR)) {
-        die "Error, $LOCK_DIR exists: another supplement or revert may be running.\n"
-            . "  If not, remove that directory and try again.\n";
+        my $owner = "";
+        if (open(my $fh, "$LOCK_DIR/owner")) {
+            $owner = <$fh>;
+            close $fh;
+            chomp $owner if defined $owner;
+        }
+        die "Error, $LOCK_DIR exists: another supplement or revert may be running"
+            . ($owner ? " ($owner)" : "") . ".\n"
+            . "  If not (eg. that process no longer exists), remove that directory and try again.\n";
     }
     $have_lock = 1;
+    if (open(my $ofh, ">$LOCK_DIR/owner")) {
+        print $ofh "supplement_ctat_genome_lib.pl, host " . hostname() . ", pid $$, started " . scalar(localtime()) . "\n";
+        close $ofh;
+    }
     return;
+}
+
+
+####
+sub release_lock {
+    unlink("$LOCK_DIR/owner");
+    rmdir($LOCK_DIR);
+    $have_lock = 0;
+    return;
+}
+
+
+####
+sub remove_stale_files {
+
+    ## Left by an earlier run that was killed. Removed only while holding the lock, so no
+    ## running supplement or revert can own them. Replacement files are never written into an
+    ## existing file, so this also guarantees a stale one can't be a link to a lib file.
+
+    my %managed = map { $_ => 1 } (@REQUIRED_MANAGED, @OPTIONAL_MANAGED, @PROT_INFO_MANAGED);
+
+    opendir(my $dh, $genome_lib_dir) or die "Error, cannot read $genome_lib_dir: $!";
+    foreach my $entry (readdir($dh)) {
+        if ($entry =~ /^(.+?)(\.bkup)?\.tmp\.\d+$/ && $managed{$1}) {
+            print STDERR "-removing stale temporary file from an interrupted run: $entry\n";
+            unlink("$genome_lib_dir/$entry") or die "Error, cannot remove $genome_lib_dir/$entry: $!";
+        }
+    }
+    closedir($dh);
+
+    opendir($dh, $SUPP_DIR) or die "Error, cannot read $SUPP_DIR: $!";
+    foreach my $entry (readdir($dh)) {
+        if ($entry =~ /^\.work\.\d+$/) {
+            print STDERR "-removing stale work directory from an interrupted run: supplemental/$entry\n";
+            rmtree("$SUPP_DIR/$entry");
+        }
+        elsif ($entry =~ /^manifest\.json\.tmp\.\d+$/) {
+            unlink("$SUPP_DIR/$entry");
+        }
+    }
+    closedir($dh);
+
+    return;
+}
+
+
+####
+sub remove_orphan_supplement_files {
+    my ($manifest) = @_;
+
+    ## supplement gtfs not recorded in the manifest: left by a run interrupted just before
+    ## recording its supplement (the lib files were not yet changed)
+    my %recorded;
+    foreach my $supp (@{$manifest->{supplements}}) {
+        $recorded{$supp->{normalized_gtf}} = 1;
+        $recorded{$supp->{input_gtf_copy}} = 1;
+    }
+    opendir(my $dh, $SUPP_DIR) or die "Error, cannot read $SUPP_DIR: $!";
+    foreach my $entry (readdir($dh)) {
+        if ($entry =~ /^supp_\d+\..*\.gtf$/ && ! $recorded{$entry}) {
+            print STDERR "-removing unrecorded supplement file from an interrupted run: supplemental/$entry\n";
+            unlink("$SUPP_DIR/$entry");
+        }
+    }
+    closedir($dh);
+
+    return;
+}
+
+
+####
+sub require_tool {
+    my ($tool, $purpose) = @_;
+
+    foreach my $dir (split(/:/, $ENV{PATH} || "")) {
+        if (-x "$dir/$tool" && ! -d "$dir/$tool") {
+            return;
+        }
+    }
+    die "Error, '$tool' is required $purpose, but was not found in PATH; no changes made.\n";
+}
+
+
+####
+sub shq {
+    my ($str) = @_;
+    ## single-quote for the shell
+    $str =~ s/'/'\\''/g;
+    return("'$str'");
 }
 
 
@@ -632,13 +860,23 @@ sub check_backup_state {
 
     ## every .bkup must be one this utility created and recorded.
     foreach my $file (@REQUIRED_MANAGED, @OPTIONAL_MANAGED, @PROT_INFO_MANAGED) {
-        my $bkup = "$genome_lib_dir/$file.bkup";
+        my $lib_file = "$genome_lib_dir/$file";
+        my $bkup = "$lib_file.bkup";
         if (-e $bkup && ! $manifest->{backups}->{$file}) {
-            die "Error, found $bkup but it is not recorded in $MANIFEST.\n"
-                . "  The lib is in an unexpected state; resolve this before supplementing.\n";
+            ## A run interrupted right after making the backup, before recording it: the lib file
+            ## had not been replaced yet, so the two are identical and the backup is the original.
+            if (-e $lib_file && &same_content($lib_file, $bkup)) {
+                print STDERR "-recording backup $file.bkup made by an interrupted run (identical to $file)\n";
+                $manifest->{backups}->{$file} = &md5_file($bkup);
+                &write_manifest($manifest) unless $dry_run_flag;
+                next;
+            }
+            die "Error, found $bkup but it is not recorded in $MANIFEST, and it differs from $file.\n"
+                . "  It was not made by this utility (or the lib was changed by other means); resolve this before supplementing.\n";
         }
         if ($manifest->{backups}->{$file} && ! -e $bkup) {
-            die "Error, $MANIFEST records a backup of $file but $bkup is missing.\n";
+            die "Error, $MANIFEST records a backup of $file but $bkup is missing.\n"
+                . "  If a revert was interrupted, run revert_ctat_genome_lib_supplement.pl again to complete it.\n";
         }
     }
     foreach my $supp (@{$manifest->{supplements}}) {
@@ -653,20 +891,40 @@ sub check_backup_state {
 
 
 ####
-sub check_disk_space {
-    my ($managed_aref) = @_;
+sub same_content {
+    my ($file_a, $file_b) = @_;
 
-    my $needed = 0;
+    my @stat_a = stat($file_a);
+    my @stat_b = stat($file_b);
+    if ($stat_a[0] == $stat_b[0] && $stat_a[1] == $stat_b[1]) {
+        return(1); # the same file
+    }
+    if ($stat_a[7] != $stat_b[7]) {
+        return(0);
+    }
+    return(&md5_file($file_a) eq &md5_file($file_b));
+}
+
+
+####
+sub check_disk_space {
+    my ($managed_aref, $workspace_bytes) = @_;
+
+    my $needed = $workspace_bytes || 0;
     foreach my $file (@$managed_aref) {
         my $size = -s &src_file($file);
         $needed += $size; # replacement file
         unless (-e "$genome_lib_dir/$file.bkup") {
-            $needed += $size; # backup copy
+            $needed += $size; # backup, in case it can't be a hard link
         }
     }
 
-    my $df = `df -Pk $genome_lib_dir | tail -1`;
+    my $df = `df -Pk @{[ &shq($genome_lib_dir) ]} | tail -1`;
     my @x = split(/\s+/, $df);
+    unless (@x >= 4 && $x[3] =~ /^\d+$/) {
+        print STDERR "-WARNING: could not determine free disk space in $genome_lib_dir\n";
+        return;
+    }
     my $avail = $x[3] * 1024;
     if ($avail < $needed * 1.1) {
         die sprintf("Error, insufficient disk space in %s: need ~%.2f GB, have %.2f GB\n",
@@ -674,6 +932,34 @@ sub check_disk_space {
     }
 
     return;
+}
+
+
+####
+sub prot_info_workspace_estimate {
+    my ($combined_gtf) = @_;
+
+    ## build_prot_info writes a genome subset of every chromosome with supplemental CDS records
+    my %chrs;
+    open(my $fh, $combined_gtf) or die "Error, cannot open $combined_gtf";
+    while (<$fh>) {
+        my @x = split(/\t/);
+        if ($x[2] && $x[2] eq "CDS") {
+            $chrs{$x[0]} = 1;
+        }
+    }
+    close $fh;
+
+    my $bytes = 0;
+    if (open(my $fai, "$genome_lib_dir/ref_genome.fa.fai")) {
+        while (<$fai>) {
+            my ($chr, $len) = split(/\t/);
+            $bytes += $len if $chrs{$chr};
+        }
+        close $fai;
+    }
+
+    return($bytes * 1.02);
 }
 
 
@@ -695,7 +981,8 @@ sub parse_attributes {
     my ($info) = @_;
 
     my @atts;
-    while ($info =~ /\s*([^\s;]+)\s+(\"[^\"]*\"|[^;]+?)\s*;/g) {
+    ## the final attribute's ';' is optional
+    while ($info =~ /\s*([^\s;]+)\s+(\"[^\"]*\"|[^;]+?)\s*(?:;|$)/g) {
         my ($key, $val) = ($1, $2);
         $val =~ s/^\"|\"$//g;
         push (@atts, [$key, $val]);
@@ -715,6 +1002,10 @@ sub load_gene_spans {
         chomp;
         unless (/\w/) { next; }
         my ($gene_id, $chr, $lend, $rend, $orient, $gene_name, $gene_type) = split(/\t/);
+        ## gtf_to_gene_spans.pl lists a gene lacking a gene_name under its gene_id: it has no name
+        if (! defined $gene_name || $gene_name eq "" || $gene_name eq $gene_id) {
+            $gene_name = ".";
+        }
         my $key = "$gene_id\t$chr";
         $genes{$key} = { gene_id => $gene_id,
                          chr => $chr,
@@ -756,7 +1047,7 @@ sub add_prior_supplement_genes {
                                     lend => $x[3],
                                     rend => $x[4],
                                     orient => $x[6],
-                                    gene_name => $att{gene_name} || ".",
+                                    gene_name => ($att{gene_name} && $att{gene_name} ne $att{gene_id}) ? $att{gene_name} : ".",
                                     gene_type => $att{gene_type} || ".",
                                     novel => 1,
             };
@@ -780,9 +1071,14 @@ sub build_gene_lookups {
         my $gene = $genes_href->{$key};
         push (@{$by_id{$gene->{gene_id}}}, $key);
 
-        my $id_nover = $gene->{gene_id};
-        $id_nover =~ s/\.\d+$//;
-        push (@{$by_id_nover{$id_nover}}, $key);
+        ## version-stripped ids only for reference genes: ids of genes added by supplements (eg.
+        ## StringTie's STRG.100) are not versioned, and stripping them would conflate unrelated genes
+        unless ($gene->{novel}) {
+            my $id_nover = $gene->{gene_id};
+            if ($id_nover =~ s/\.\d+$//) {
+                push (@{$by_id_nover{$id_nover}}, $key);
+            }
+        }
 
         if ($gene->{gene_name} ne ".") {
             push (@{$by_name{$gene->{gene_name}}}, $key);
@@ -819,8 +1115,14 @@ sub load_ref_exons {
     my %token_to_key;
     foreach my $key (keys %$genes_href) {
         my $gene = $genes_href->{$key};
-        my $token = ($gene->{gene_name} ne ".") ? "$gene->{gene_name}^$gene->{gene_id}" : $gene->{gene_id};
-        $token_to_key{"$token\t$gene->{chr}"} = $key;
+        if ($gene->{gene_name} ne ".") {
+            $token_to_key{"$gene->{gene_name}^$gene->{gene_id}\t$gene->{chr}"} = $key;
+        }
+        else {
+            $token_to_key{"$gene->{gene_id}\t$gene->{chr}"} = $key;
+            ## as written for novel genes by earlier versions of this utility
+            $token_to_key{"$gene->{gene_id}^$gene->{gene_id}\t$gene->{chr}"} = $key;
+        }
     }
 
     my %exons; # chr -> orient -> [ [lend, rend, gene_key], ... ] sorted by lend
@@ -891,28 +1193,42 @@ sub parse_supplemental_gtf {
 
     my %transcripts;
     my %report = ( skipped_unstranded => [],
-                   dropped_gene_records => 0 );
-    my @errors;
+                   dropped_gene_records => 0,
+                   errors => [] );
+    my $errors = $report{errors};
+    my %gene_id_conflict;
 
     open(my $fh, $gtf) or die "Error, cannot open $gtf";
+    read($fh, my $magic, 2);
+    if (defined $magic && $magic eq "\x1f\x8b") {
+        die "Error, $gtf is gzip-compressed; please provide it uncompressed.\n";
+    }
+    seek($fh, 0, 0);
     while (<$fh>) {
         if (/^\#/) { next; }
         unless (/\w/) { next; }
         chomp;
+        s/\r$//;
         my @x = split(/\t/);
         unless (scalar(@x) == 9) {
-            die "Error, line $. of $gtf does not have 9 tab-delimited fields:\n$_\n";
+            push (@$errors, "line $. does not have 9 tab-delimited fields: $_");
+            next;
         }
         if ($x[2] eq "gene") {
             ## gene records are taken from the reference (or derived for novel genes).
             $report{dropped_gene_records}++;
             next;
         }
+        unless ($x[3] =~ /^\d+$/ && $x[4] =~ /^\d+$/ && $x[3] <= $x[4]) {
+            push (@$errors, "line $. has invalid coordinates: $_");
+            next;
+        }
         my @atts = &parse_attributes($x[8]);
         my %att = map { $_->[0] => $_->[1] } @atts;
         my $tid = $att{transcript_id};
         unless (defined $tid && $tid ne "") {
-            die "Error, line $. of $gtf lacks a transcript_id:\n$_\n";
+            push (@$errors, "line $. lacks a transcript_id: $_");
+            next;
         }
         my $transcript = $transcripts{$tid};
         unless ($transcript) {
@@ -926,7 +1242,17 @@ sub parse_supplemental_gtf {
             };
         }
         if ($x[0] ne $transcript->{chr} || $x[6] ne $transcript->{orient}) {
-            die "Error, transcript $tid has records on more than one chromosome/strand in $gtf (line $.)\n";
+            push (@$errors, "transcript $tid has records on more than one chromosome/strand (line $.)");
+            $transcript->{bad} = 1;
+            next;
+        }
+        ## the same transcript_id under different genes (eg. merged GTFs) must not be combined
+        my $gene_id = $att{gene_id} // "";
+        my $first_gene_id = $transcript->{atts}->{gene_id} // "";
+        if ($gene_id ne "" && $first_gene_id ne "" && $gene_id ne $first_gene_id && ! $gene_id_conflict{$tid}) {
+            push (@$errors, "transcript $tid has records with different gene_ids ('$first_gene_id', '$gene_id'; line $.)");
+            $gene_id_conflict{$tid} = 1;
+            $transcript->{bad} = 1;
         }
         foreach my $key (keys %att) {
             unless (exists $transcript->{atts}->{$key}) {
@@ -940,10 +1266,16 @@ sub parse_supplemental_gtf {
     }
     close $fh;
 
-    foreach my $tid (keys %transcripts) {
+    foreach my $tid (sort { $transcripts{$a}->{order} <=> $transcripts{$b}->{order} } keys %transcripts) {
         my $transcript = $transcripts{$tid};
+        if ($transcript->{bad}) {
+            delete $transcripts{$tid};
+            next;
+        }
         unless (@{$transcript->{exons}}) {
-            die "Error, supplemental transcript $tid has no exon records";
+            push (@$errors, "transcript $tid has no exon records");
+            delete $transcripts{$tid};
+            next;
         }
         if ($transcript->{orient} ne '+' && $transcript->{orient} ne '-') {
             push (@{$report{skipped_unstranded}}, $tid);
@@ -963,6 +1295,7 @@ sub assign_and_normalize {
                    warnings => [],
                    num_transcripts_kept => 0,
                    existing_genes => {},
+                   earlier_supplement_genes => {},
                    novel_genes => {},
                    assigned_by => {},
         );
@@ -976,6 +1309,10 @@ sub assign_and_normalize {
         my $orient = $transcript->{orient};
         my $atts = $transcript->{atts};
 
+        if ($tid =~ /[\|\^\s]/) {
+            push (@{$report{errors}}, "transcript_id '$tid' contains a disallowed character ('|', '^' or whitespace)");
+            next;
+        }
         if (my $source = $existing_tids_href->{$tid}) {
             push (@{$report{errors}}, "transcript_id $tid already exists in the $source annotation");
             next;
@@ -991,18 +1328,30 @@ sub assign_and_normalize {
         if ($gene_key) {
             my $gene = $genes_href->{$gene_key};
             if ($gene->{chr} ne $chr || $gene->{orient} ne $orient) {
-                push (@{$report{errors}}, "transcript $tid ($chr:$orient) assigned by $method to gene $gene->{gene_id} "
-                      . "($gene->{gene_name}) which is on $gene->{chr}:$gene->{orient}");
+                push (@{$report{errors}}, "transcript $tid ($chr:$orient) assigned by $method to gene "
+                      . &gene_label($gene) . " which is on $gene->{chr}:$gene->{orient}");
                 next;
             }
-            $report{assigned_by}->{$method}++;
-            $report{existing_genes}->{$gene_key} = 1 unless $gene->{novel};
-
-            ## flag likely coordinate mismatches (eg. a different genome build)
+            ## catch likely mismatches (eg. a different genome build, or a reused id or name)
             my @coords = sort { $a <=> $b } map { @$_ } @{$transcript->{exons}};
             if (defined $gene->{lend} && ($coords[-1] < $gene->{lend} || $coords[0] > $gene->{rend})) {
-                push (@{$report{warnings}}, "transcript $tid ($chr:$coords[0]-$coords[-1]) does not overlap its assigned gene "
-                      . "$gene->{gene_name} ($gene->{chr}:$gene->{lend}-$gene->{rend}); the gene span will be extended to include it");
+                my $msg = "transcript $tid ($chr:$coords[0]-$coords[-1]) does not overlap the gene it was assigned to by $method, "
+                    . &gene_label($gene) . " ($gene->{chr}:$gene->{lend}-$gene->{rend})";
+                if ($allow_nonoverlapping_flag) {
+                    push (@{$report{warnings}}, "$msg; the gene span will be extended to include it");
+                }
+                else {
+                    push (@{$report{errors}}, "$msg (see --allow_nonoverlapping)");
+                    next;
+                }
+            }
+
+            $report{assigned_by}->{$method}++;
+            if ($gene->{novel}) {
+                $report{earlier_supplement_genes}->{$gene_key} = 1;
+            }
+            else {
+                $report{existing_genes}->{$gene_key} = 1;
             }
         }
         else {
@@ -1035,7 +1384,7 @@ sub assign_and_normalize {
             $genes_href->{$gene_key} = { gene_id => $gene_id,
                                          chr => $chr,
                                          orient => $orient,
-                                         gene_name => $gene_id,
+                                         gene_name => ".", # listed under its gene_id, as for any gene without a name
                                          gene_type => $novel_gene_type,
                                          novel => 1,
             };
@@ -1098,17 +1447,25 @@ sub assign_gene {
         if (my $keys_aref = $lookup->{by_id}->{$val}) {
             my $key = &$pick($keys_aref);
             return($key, $att) if $key;
+            my @chrs = sort map { $genes_href->{$_}->{chr} } @$keys_aref;
+            return(undef, undef, "$att '$val' matches genes on more than one other chromosome (@chrs), none on $chr");
         }
     }
 
-    ## by version-stripped gene_id / ref_gene_id
+    ## by version-stripped gene_id / ref_gene_id (reference genes only), requiring chr and strand agreement
     foreach my $att ("gene_id", "ref_gene_id") {
         my $val = $atts->{$att} or next;
         $val =~ s/\.\d+$//;
         if (my $keys_aref = $lookup->{by_id_nover}->{$val}) {
-            my $key = &$pick($keys_aref);
-            return($key, "$att (version-stripped)") if $key;
-            return(undef, undef, "$att '$atts->{$att}' matches more than one reference gene");
+            my @candidates = grep { $genes_href->{$_}->{chr} eq $chr
+                                        && $genes_href->{$_}->{orient} eq $orient } @$keys_aref;
+            if (scalar(@candidates) == 1) {
+                return($candidates[0], "$att (version-stripped)");
+            }
+            elsif (scalar(@candidates) > 1) {
+                return(undef, undef, "$att '$atts->{$att}' (version-stripped) matches more than one reference gene on $chr:$orient");
+            }
+            ## otherwise fall through to gene_name matching
         }
     }
 
@@ -1145,12 +1502,19 @@ sub assign_gene {
             return($candidates[0], "exon overlap");
         }
         elsif (scalar(@candidates) > 1) {
-            my @names = sort map { $genes_href->{$_}->{gene_name} } @candidates;
+            my @names = sort map { &gene_label($genes_href->{$_}) } @candidates;
             return(undef, undef, "exons overlap more than one reference gene (@names)");
         }
     }
 
     return(undef);
+}
+
+
+####
+sub gene_label {
+    my ($gene) = @_;
+    return( ($gene->{gene_name} ne ".") ? "$gene->{gene_name} ($gene->{gene_id})" : $gene->{gene_id} );
 }
 
 
@@ -1191,6 +1555,9 @@ sub print_report {
     print STDERR "\n#### supplemental annotation summary ####\n";
     print STDERR "  transcripts kept: $report->{num_transcripts_kept}\n";
     print STDERR "  existing genes receiving isoforms: " . scalar(keys %{$report->{existing_genes}}) . "\n";
+    if (my $num = scalar(keys %{$report->{earlier_supplement_genes}})) {
+        print STDERR "  genes from earlier supplements receiving isoforms: $num\n";
+    }
     print STDERR "  novel genes: " . scalar(keys %{$report->{novel_genes}}) . "\n";
     foreach my $method (sort keys %{$report->{assigned_by}}) {
         print STDERR "    assigned by $method: $report->{assigned_by}->{$method}\n";
@@ -1251,7 +1618,7 @@ sub append_files {
     my ($orig_file, $append_file, $out_file) = @_;
 
     &copy_with_trailing_newline($orig_file, $out_file);
-    &process_cmd("cat $append_file >> $out_file");
+    &process_cmd("cat " . &shq($append_file) . " >> " . &shq($out_file));
 
     return;
 }
@@ -1261,7 +1628,7 @@ sub append_files {
 sub copy_with_trailing_newline {
     my ($orig_file, $out_file) = @_;
 
-    &process_cmd("cp $orig_file $out_file");
+    &process_cmd("cp " . &shq($orig_file) . " " . &shq($out_file));
 
     ## so appended records don't run onto the last original line
     if (-s $out_file) {
@@ -1285,7 +1652,8 @@ sub build_mini_sortu {
     my ($combined_gtf, $out_file) = @_;
 
     my $supp_records = "$WORKDIR/all_supplements.mini";
-    &process_cmd("$UTILDIR/gtf_to_exon_gene_records.pl $combined_gtf | sort -k 1,1 -k4,4g -k5,5g | uniq > $supp_records");
+    &process_cmd(&shq("$UTILDIR/gtf_to_exon_gene_records.pl") . " " . &shq($combined_gtf)
+                 . " | sort -k 1,1 -k4,4g -k5,5g | uniq > " . &shq($supp_records));
 
     ## an exon is identified as the reader does: by gene, coordinates and strand (source and score ignored)
     my $exon_key = sub {
@@ -1351,7 +1719,8 @@ sub build_gene_spans {
                                           lend => $x[3],
                                           rend => $x[4],
                                           orient => $x[6],
-                                          gene_name => $att{gene_name} || ".",
+                                          ## as gtf_to_gene_spans.pl: a gene without a gene_name is listed under its gene_id
+                                          gene_name => $att{gene_name} || $att{gene_id},
                                           gene_type => $att{gene_type} || ".",
             };
             push (@novel_order, $key);
@@ -1398,7 +1767,7 @@ sub build_gene_spans {
 sub build_fusion_annot_idx {
     my ($new_gene_spans, $affected_gene_keys_href, $out_file) = @_;
 
-    &process_cmd("cp " . &src_file("fusion_annot_lib.idx") . " $out_file");
+    &process_cmd("cp " . &shq(&src_file("fusion_annot_lib.idx")) . " " . &shq($out_file));
 
     my %idx;
     tie (%idx, 'DB_File', $out_file, O_RDWR, 0666, $DB_BTREE) or die "Error, cannot open $out_file for update: $!";
@@ -1433,7 +1802,7 @@ sub build_mm2_splice_bed {
     my ($combined_gtf, $out_file) = @_;
 
     my $supp_bed = "$WORKDIR/all_supplements.mm2.splice.bed";
-    &process_cmd("$UTILDIR/paftools.ctat.js gff2bed $combined_gtf > $supp_bed");
+    &process_cmd(&shq("$UTILDIR/paftools.ctat.js") . " gff2bed " . &shq($combined_gtf) . " > " . &shq($supp_bed));
     unless (-s $supp_bed) {
         die "Error, paftools gff2bed produced no records from $combined_gtf";
     }
@@ -1481,14 +1850,16 @@ sub build_prot_info {
     close $ofh;
 
     my $subset_genome = "$WORKDIR/prot_info_subset.genome.fa";
-    &process_cmd("samtools faidx $genome_lib_dir/ref_genome.fa " . join(" ", sort keys %chrs) . " > $subset_genome");
+    &process_cmd("samtools faidx " . &shq("$genome_lib_dir/ref_genome.fa") . " " . join(" ", map { &shq($_) } sort keys %chrs)
+                 . " > " . &shq($subset_genome));
 
     my $subset_prefix = "$WORKDIR/prot_info_subset";
-    &process_cmd("$UTILDIR/build_prot_info_db.pl --gtf $subset_gtf --genome_fa $subset_genome --out_prefix $subset_prefix 2> $subset_prefix.log");
+    &process_cmd(&shq("$UTILDIR/build_prot_info_db.pl") . " --gtf " . &shq($subset_gtf) . " --genome_fa " . &shq($subset_genome)
+                 . " --out_prefix " . &shq($subset_prefix) . " 2> " . &shq("$subset_prefix.log"));
 
     ## update a copy of the original db with the rebuilt records for these genes
     my $out_dbm = $tmp_outputs_href->{"ref_annot.prot_info.dbm"};
-    &process_cmd("cp " . &src_file("ref_annot.prot_info.dbm") . " $out_dbm");
+    &process_cmd("cp " . &shq(&src_file("ref_annot.prot_info.dbm")) . " " . &shq($out_dbm));
 
     my (%subset_idx, %idx);
     tie (%subset_idx, 'DB_File', "$subset_prefix.prot_info.dbm", O_RDONLY, 0, $DB_BTREE) or die "Error, cannot open $subset_prefix.prot_info.dbm: $!";
@@ -1502,7 +1873,7 @@ sub build_prot_info {
     ## append the supplemental cds and protein sequences
     foreach my $type ("cds", "pep") {
         my $out_file = $tmp_outputs_href->{"ref_annot.$type"} or next;
-        &process_cmd("cp " . &src_file("ref_annot.$type") . " $out_file");
+        &process_cmd("cp " . &shq(&src_file("ref_annot.$type")) . " " . &shq($out_file));
         open($fh, "$subset_prefix.$type") or die "Error, cannot open $subset_prefix.$type";
         open($ofh, ">>$out_file") or die "Error, cannot append to $out_file";
         my $keep = 0;

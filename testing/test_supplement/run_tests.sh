@@ -171,6 +171,142 @@ check "failed supplement removes the linked copy" "[ $? -eq 1 ] && [ ! -e $COPY 
 rm -rf $SRC
 
 
+fresh() { rm -rf "${WORK:?}" && cp -a "${OUT:?}/pristine" "$WORK"; }
+supp() { run $UTILDIR/supplement_ctat_genome_lib.pl "$@"; }
+SDF4_EXONS() { awk -F'\t' '/transcript_id "ENST00000263741.7"/ && $3=="exon"' $OUT/pristine/ref_annot.gtf; }
+
+
+echo "## a second StringTie supplement: STRG ids are not conflated with earlier novel STRG genes"
+fresh
+printf 'chr1\tStringTie\texon\t2950000\t2950400\t1000\t+\t.\tgene_id "STRG.100"; transcript_id "STRG.100.1";\nchr1\tStringTie\texon\t2951000\t2951300\t1000\t+\t.\tgene_id "STRG.100"; transcript_id "STRG.100.2";\nchr1\tStringTie\texon\t2970000\t2970400\t1000\t+\t.\tgene_id "STRG.101"; transcript_id "STRG.101.1";\n' > $OUT/strg_run1.gtf
+SDF4_EXONS | awk -F'\t' -v OFS='\t' '{$2="StringTie"; $9="gene_id \"STRG.200\"; transcript_id \"STRG.200.1\"; ref_gene_name \"SDF4\";"; print}' > $OUT/strg_run2.gtf
+supp --genome_lib_dir $WORK --supp_gtf $OUT/strg_run1.gtf --allow_novel_genes
+check "run 1 adds novel genes STRG.100, STRG.101" "[ $? -eq 0 ] && grep -qP '^STRG.100\t' $WORK/ref_annot.gtf.gene_spans && grep -qP '^STRG.101\t' $WORK/ref_annot.gtf.gene_spans"
+supp --genome_lib_dir $WORK --supp_gtf $OUT/strg_run2.gtf
+check "run 2 transcript assigned to SDF4 by ref_gene_name, not to an earlier STRG gene" \
+    "[ $? -eq 0 ] && grep -q 'assigned by ref_gene_name: 1' $OUT/last.log && grep -q 'gene_id \"ENSG00000078808.12\"; transcript_id \"STRG.200.1\"' $WORK/supplemental/supp_002.strg_run2.gtf"
+check "earlier novel gene spans unchanged" "grep -qP '^STRG.100\tchr1\t2950000\t2951300\t' $WORK/ref_annot.gtf.gene_spans"
+
+
+echo "## a transcript not overlapping the gene it is assigned to"
+fresh
+printf 'chr1\tx\texon\t2990000\t2990400\t.\t-\t.\tgene_id "G1"; transcript_id "FAR.1"; gene_name "SDF4";\n' > $OUT/far.gtf
+supp --genome_lib_dir $WORK --supp_gtf $OUT/far.gtf
+check "rejected by default" "[ $? -eq 1 ] && grep -q 'does not overlap the gene it was assigned to by gene_name' $OUT/last.log && snapshot $WORK | cmp -s - <(snapshot $OUT/pristine)"
+supp --genome_lib_dir $WORK --supp_gtf $OUT/far.gtf --allow_nonoverlapping
+check "allowed with --allow_nonoverlapping (span extended, with a warning)" \
+    "[ $? -eq 0 ] && grep -q 'the gene span will be extended' $OUT/last.log && grep -qP '^ENSG00000078808.12\tchr1\t1152288\t2990400\t' $WORK/ref_annot.gtf.gene_spans"
+
+
+echo "## GTF parsing"
+fresh
+printf 'chr1\tx\texon\t1158624\t1158737\t.\t-\t.\tgene_id "ENSG00000078808.12"; transcript_id "NOSEMI.1"\n' > $OUT/nosemi.gtf
+supp --genome_lib_dir $WORK --supp_gtf $OUT/nosemi.gtf --dry_run
+check "attribute column without a final ';' is parsed" "[ $? -eq 0 ] && grep -q 'transcripts kept: 1' $OUT/last.log"
+printf 'chr1\tx\texon\t1158624\t1158737\t.\t-\t.\tgene_id "G1"; transcript_id "T1";\nchr1\tx\texon\t1163848\t1164356\t.\t-\t.\tgene_id "G2"; transcript_id "T1";\n' > $OUT/conflict.gtf
+supp --genome_lib_dir $WORK --supp_gtf $OUT/conflict.gtf --dry_run --allow_novel_genes
+check "a transcript_id under two gene_ids is rejected" "[ $? -eq 1 ] && grep -q 'has records with different gene_ids' $OUT/last.log"
+printf 'chr1\tx\texon\t1158624\n' > $OUT/bad.gtf
+printf 'chr1\tx\texon\t1158624\t1158737\t.\t-\t.\tgene_id "G1";\n' >> $OUT/bad.gtf
+supp --genome_lib_dir $WORK --supp_gtf $OUT/bad.gtf --dry_run
+check "all structural problems reported together" "[ $? -eq 1 ] && grep -q 'does not have 9 tab-delimited fields' $OUT/last.log && grep -q 'lacks a transcript_id' $OUT/last.log"
+gzip -c $OUT/nosemi.gtf > $OUT/nosemi.gtf.gz
+supp --genome_lib_dir $WORK --supp_gtf $OUT/nosemi.gtf.gz --dry_run
+check "gzipped input reported as such" "[ $? -eq 1 ] && grep -q 'gzip-compressed' $OUT/last.log"
+
+
+echo "## reference gene without a gene_name (eg. Ensembl-style libs)"
+fresh
+sed -i '/ENSG00000078808.12/ s/ gene_name "SDF4";//' $WORK/ref_annot.gtf
+$UTILDIR/gtf_to_exon_gene_records.pl $WORK/ref_annot.gtf | sort -k 1,1 -k4,4g -k5,5g | uniq > $WORK/ref_annot.gtf.mini.sortu
+$UTILDIR/gtf_to_gene_spans.pl $WORK/ref_annot.gtf > $WORK/ref_annot.gtf.gene_spans 2> /dev/null
+rm -f "${WORK:?}/fusion_annot_lib.idx"
+$UTILDIR/build_fusion_annot_db_index.pl --gene_spans $WORK/ref_annot.gtf.gene_spans --out_db_file $WORK/fusion_annot_lib.idx 2> /dev/null
+printf 'chr1\tx\texon\t1152400\t1153184\t.\t-\t.\tgene_id "XLOC_9"; transcript_id "OVL.1";\nchr1\tx\texon\t1158624\t1158737\t.\t-\t.\tgene_id "XLOC_9"; transcript_id "OVL.1";\n' > $OUT/ovl.gtf
+supp --genome_lib_dir $WORK --supp_gtf $OUT/ovl.gtf --assign_by_overlap
+check "assigned to the unnamed gene by exon overlap" "[ $? -eq 0 ] && grep -q 'assigned by exon overlap: 1' $OUT/last.log"
+check "no synthetic gene_name in the supplement" "! grep -q 'gene_name' $WORK/supplemental/supp_001.ovl.gtf"
+check "mini.sortu lists the gene under a single token" \
+    "[ \$(grep -o 'gene_id \"[^\"]*ENSG00000078808.12[^\"]*\"' $WORK/ref_annot.gtf.mini.sortu | sort -u | wc -l) -eq 1 ]"
+
+
+echo "## stale temporary files from an interrupted run"
+fresh
+ln $WORK/ref_annot.gtf.gene_spans $WORK/ref_annot.gtf.gene_spans.tmp.99999
+mkdir -p $WORK/supplemental/.work.99999
+supp --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes
+check "stale files removed; original intact" \
+    "[ $? -eq 0 ] && [ ! -e $WORK/ref_annot.gtf.gene_spans.tmp.99999 ] && [ ! -e $WORK/supplemental/.work.99999 ] && cmp -s $OUT/pristine/ref_annot.gtf.gene_spans $WORK/ref_annot.gtf.gene_spans.bkup"
+
+
+echo "## interrupted by a signal"
+fresh
+mkdir -p $OUT/slowbin
+printf '#!/bin/bash\ntouch %s/k8.started\nsleep 60\n' $OUT > $OUT/slowbin/k8 && chmod +x $OUT/slowbin/k8
+rm -f "${OUT:?}/k8.started"
+PATH=$OUT/slowbin:$PATH $UTILDIR/supplement_ctat_genome_lib.pl --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes > $OUT/last.log 2>&1 &
+pid=$!
+for i in $(seq 1 600); do [ -e $OUT/k8.started ] && break; sleep 0.1; done
+kill -TERM $pid; wait $pid; status=$?
+pkill -f "$OUT/slowbin/k8" 2> /dev/null
+check "terminated run exits 1 and cleans up (no lock, temp or work files); lib unchanged" \
+    "[ $status -eq 1 ] && [ ! -e $WORK/supplemental/.lock ] && ! ls $WORK/*.tmp.* > /dev/null 2>&1 && ! ls -d $WORK/supplemental/.work.* > /dev/null 2>&1 && snapshot $WORK | cmp -s - <(snapshot $OUT/pristine)"
+supp --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes
+check "next run succeeds" "[ $? -eq 0 ]"
+
+
+echo "## interrupted commit is completed by rerunning"
+fresh
+supp --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes
+cp $WORK/ref_annot.gtf $OUT/expected_gtf
+## simulate a kill during the renames: supplement recorded as committing, one file not yet replaced
+perl -MJSON::PP -i -0pe '$m = decode_json($_); $_->{status} = "committing" for @{$m->{supplements}}; $_ = JSON::PP->new->pretty->canonical->encode($m)' $WORK/supplemental/manifest.json
+rm -f "${WORK:?}/ref_annot.gtf" && ln $WORK/ref_annot.gtf.bkup $WORK/ref_annot.gtf
+supp --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes
+check "rerun completes it" "[ $? -eq 0 ] && grep -q 'was interrupted while being committed; completing it' $OUT/last.log && cmp -s $OUT/expected_gtf $WORK/ref_annot.gtf && grep -q '\"status\" : \"complete\"' $WORK/supplemental/manifest.json"
+check "no duplicate supplement recorded" "[ \$(grep -c '\"label\"' $WORK/supplemental/manifest.json) -eq 1 ]"
+
+
+echo "## backup made but not recorded (interrupted run)"
+fresh
+mkdir $WORK/supplemental && ln $WORK/ref_annot.gtf $WORK/ref_annot.gtf.bkup
+supp --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes
+check "identical unrecorded backup is adopted" "[ $? -eq 0 ] && grep -q 'recording backup ref_annot.gtf.bkup made by an interrupted run' $OUT/last.log"
+fresh
+echo "# other" > $WORK/ref_annot.gtf.gene_spans.bkup
+supp --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes
+check "a different unrecorded backup is refused" "[ $? -eq 1 ] && grep -q 'not recorded in .* and it differs' $OUT/last.log"
+
+
+echo "## interrupted revert is completed by rerunning"
+fresh
+supp --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes
+mv $WORK/ref_annot.gtf.bkup $WORK/ref_annot.gtf      # killed after restoring one file
+run $UTILDIR/revert_ctat_genome_lib_supplement.pl --genome_lib_dir $WORK
+check "revert after a partial revert succeeds; lib identical to original" "[ $? -eq 0 ] && diff -r $OUT/pristine $WORK > /dev/null"
+supp --genome_lib_dir $WORK --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes
+for f in ref_annot.gtf ref_annot.gtf.mini.sortu ref_annot.gtf.gene_spans fusion_annot_lib.idx ref_annot.gtf.mm2.splice.bed; do mv $WORK/$f.bkup $WORK/$f; done  # killed before removing supplemental/
+run $UTILDIR/revert_ctat_genome_lib_supplement.pl --genome_lib_dir $WORK
+check "revert after all files were restored succeeds; lib identical to original" "[ $? -eq 0 ] && diff -r $OUT/pristine $WORK > /dev/null"
+
+
+echo "## paths with spaces; symlinked lib dir with --linked_copy"
+SPACED="${OUT:?}/with space/ctat lib"
+mkdir -p "${OUT:?}/with space" && cp -a $OUT/pristine "$SPACED"
+supp --genome_lib_dir "$SPACED" --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes
+check "supplement of a lib path with spaces" "[ $? -eq 0 ]"
+run $UTILDIR/revert_ctat_genome_lib_supplement.pl --genome_lib_dir "$SPACED"
+check "revert of a lib path with spaces" "[ $? -eq 0 ] && diff -r $OUT/pristine \"$SPACED\" > /dev/null"
+rm -rf "${OUT:?}/with space"
+ln -sfn $OUT/pristine $OUT/lib_link
+supp --genome_lib_dir $OUT/lib_link --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes --linked_copy $OUT/linked2
+check "--linked_copy of a symlinked lib dir" "[ $? -eq 0 ] && [ \$(stat -c %i $OUT/linked2/ref_genome.fa) -eq \$(stat -c %i $OUT/pristine/ref_genome.fa) ] && [ ! -e $OUT/pristine/supplemental ]"
+rm -rf "${OUT:?}/linked2" "${OUT:?}/lib_link"
+supp --genome_lib_dir $OUT/pristine --supp_gtf $TESTDIR/supp1.gtf --assign_by_overlap --allow_novel_genes --linked_copy $OUT/linked3 --dry_run
+check "--dry_run with --linked_copy creates no copy" "[ $? -eq 0 ] && [ ! -e $OUT/linked3 ] && grep -q 'no linked copy is created' $OUT/last.log"
+rm -rf "${WORK:?}"
+
+
 echo "## original file lacking a final newline"
 cp -a $OUT/pristine $WORK
 head -c -1 $OUT/pristine/ref_annot.gtf > $WORK/ref_annot.gtf
